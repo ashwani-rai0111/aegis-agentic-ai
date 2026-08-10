@@ -1,0 +1,27 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --background: #07131a;
+  --foreground: #e4eef1;
+  --panel: rgba(18, 48, 65, 0.72);
+  --panel-border: rgba(155, 182, 192, 0.18);
+  --accent: #e8a23a;
+}
+
+body {
+  color: var(--foreground);
+  background: var(--background);
+  min-height: 100vh;
+}
+
+@layer utilities {
+  .panel {
+    @apply rounded-xl border border-[var(--panel-border)] bg-[var(--panel)] backdrop-blur-md;
+  }
+
+  .label {
+    @apply font-mono text-[11px] uppercase tracking-[0.18em] text-mist-400;
+  }
+}
