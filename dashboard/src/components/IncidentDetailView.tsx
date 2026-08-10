@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { approveIncident, fetchIncident } from "@/lib/api";
+import { approveIncident, fetchIncident, rejectIncident } from "@/lib/api";
 import { confidenceLabel, formatTime, shortId } from "@/lib/format";
 import type { IncidentDetail } from "@/lib/types";
 import { SeverityBadge, StatusBadge } from "./Badges";
@@ -11,6 +11,7 @@ export function IncidentDetailView({ incidentId }: { incidentId: string }) {
   const [incident, setIncident] = useState<IncidentDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [approving, setApproving] = useState(false);
+  const [rejecting, setRejecting] = useState(false);
 
   const load = useCallback(async () => {
     try {
@@ -33,7 +34,9 @@ export function IncidentDetailView({ incidentId }: { incidentId: string }) {
     );
   }, [incident]);
 
-  const plan = incident?.plans?.[0];
+  const plan = incident?.plans?.length
+    ? incident.plans[incident.plans.length - 1]
+    : undefined;
   const selectedHypotheses = incident?.hypotheses?.filter((h) => h.selected) ?? [];
 
   async function onApprove() {
@@ -41,10 +44,24 @@ export function IncidentDetailView({ incidentId }: { incidentId: string }) {
     try {
       const updated = await approveIncident(incidentId);
       setIncident(updated);
+      setError(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Approval failed");
     } finally {
       setApproving(false);
+    }
+  }
+
+  async function onReject() {
+    setRejecting(true);
+    try {
+      const updated = await rejectIncident(incidentId);
+      setIncident(updated);
+      setError(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Reject failed");
+    } finally {
+      setRejecting(false);
     }
   }
 
@@ -250,14 +267,30 @@ export function IncidentDetailView({ incidentId }: { incidentId: string }) {
               </div>
 
               {incident.status === "AWAITING_APPROVAL" ? (
-                <button
-                  type="button"
-                  onClick={onApprove}
-                  disabled={approving}
-                  className="rounded-lg bg-signal-mint px-4 py-2 font-mono text-sm font-semibold text-ink-950 disabled:opacity-60"
-                >
-                  {approving ? "Approving…" : "Approve remediation"}
-                </button>
+                <div className="space-y-3">
+                  <p className="text-sm text-mist-300">
+                    Medium/high-risk action paused for human approval. Approving
+                    resumes execute → verify automatically.
+                  </p>
+                  <div className="flex flex-wrap gap-2">
+                    <button
+                      type="button"
+                      onClick={onApprove}
+                      disabled={approving || rejecting}
+                      className="rounded-lg bg-signal-mint px-4 py-2 font-mono text-sm font-semibold text-ink-950 disabled:opacity-60"
+                    >
+                      {approving ? "Approving…" : "Approve & execute"}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={onReject}
+                      disabled={approving || rejecting}
+                      className="rounded-lg border border-signal-rose/50 px-4 py-2 font-mono text-sm font-semibold text-signal-rose disabled:opacity-60"
+                    >
+                      {rejecting ? "Rejecting…" : "Reject & escalate"}
+                    </button>
+                  </div>
+                </div>
               ) : null}
             </div>
           ) : (

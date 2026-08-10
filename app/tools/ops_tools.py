@@ -43,6 +43,15 @@ class ProcessInput(BaseModel):
     process_name: str = Field(..., description="PM2 process name")
 
 
+class ScaleInput(BaseModel):
+    desired_capacity: int = Field(..., description="Desired ASG/EC2 capacity")
+
+
+class ConfigInput(BaseModel):
+    key: str = Field(..., description="Configuration key")
+    value: str = Field(..., description="Configuration value")
+
+
 class ReportInput(BaseModel):
     summary: str = Field(..., description="Final incident summary")
     root_cause: str = Field(..., description="Selected root cause")
@@ -88,6 +97,79 @@ class GetCloudWatchMetricTool(BaseTool):
         )
 
 
+class GetCpuUsageTool(BaseTool):
+    name: str = "get_cpu_usage"
+    description: str = "Get host CPU utilization."
+    args_schema: Type[BaseModel] = EmptyInput
+
+    def _run(self, note: str = "") -> str:
+        state = mock_infra.get(require_incident_id())
+        return _dumps(
+            {"cpu_utilization": state["metrics"]["cpu_utilization"], "note": note}
+        )
+
+
+class GetMemoryUsageTool(BaseTool):
+    name: str = "get_memory_usage"
+    description: str = "Get host memory utilization."
+    args_schema: Type[BaseModel] = EmptyInput
+
+    def _run(self, note: str = "") -> str:
+        state = mock_infra.get(require_incident_id())
+        return _dumps(
+            {
+                "memory_utilization": state["metrics"]["memory_utilization"],
+                "note": note,
+            }
+        )
+
+
+class GetDiskUsageTool(BaseTool):
+    name: str = "get_disk_usage"
+    description: str = "Get host disk utilization."
+    args_schema: Type[BaseModel] = EmptyInput
+
+    def _run(self, note: str = "") -> str:
+        state = mock_infra.get(require_incident_id())
+        return _dumps(
+            {"disk_utilization": state["metrics"]["disk_utilization"], "note": note}
+        )
+
+
+class GetSwapUsageTool(BaseTool):
+    name: str = "get_swap_usage"
+    description: str = "Get host swap utilization."
+    args_schema: Type[BaseModel] = EmptyInput
+
+    def _run(self, note: str = "") -> str:
+        state = mock_infra.get(require_incident_id())
+        return _dumps(
+            {"swap_utilization": state["metrics"]["swap_utilization"], "note": note}
+        )
+
+
+class GetProcessesTool(BaseTool):
+    name: str = "get_processes"
+    description: str = "List top processes with memory/CPU (alias: get_process_memory)."
+    args_schema: Type[BaseModel] = EmptyInput
+
+    def _run(self, note: str = "") -> str:
+        state = mock_infra.get(require_incident_id())
+        processes = sorted(
+            state["processes"], key=lambda p: p.get("memory_mb", 0), reverse=True
+        )
+        return _dumps({"processes": processes, "note": note})
+
+
+class GetProcessMemoryTool(BaseTool):
+    name: str = "get_process_memory"
+    description: str = "Identify which processes are consuming the most memory."
+    args_schema: Type[BaseModel] = EmptyInput
+
+    def _run(self, note: str = "") -> str:
+        return GetProcessesTool()._run(note=note)
+
+
 class QueryLogsTool(BaseTool):
     name: str = "query_logs"
     description: str = "Query recent application/system logs for a service."
@@ -119,6 +201,7 @@ class GetSystemMetricsTool(BaseTool):
             {
                 "instance_id": state["instance_id"],
                 "metrics": state["metrics"],
+                "temp_files_mb": state.get("temp_files_mb"),
                 "remediated": state["remediated"],
                 "note": note,
             }
@@ -141,6 +224,57 @@ class GetPm2StatusTool(BaseTool):
         )
 
 
+class GetPm2LogsTool(BaseTool):
+    name: str = "get_pm2_logs"
+    description: str = "Get recent PM2 logs for a process."
+    args_schema: Type[BaseModel] = ProcessInput
+
+    def _run(self, process_name: str) -> str:
+        state = mock_infra.get(require_incident_id())
+        lines = state.get("pm2_logs", {}).get(process_name, [])
+        return _dumps({"process_name": process_name, "lines": lines})
+
+
+class GetMysqlStatusTool(BaseTool):
+    name: str = "get_mysql_status"
+    description: str = "Inspect MySQL health: connections, buffer pool, threads."
+    args_schema: Type[BaseModel] = EmptyInput
+
+    def _run(self, note: str = "") -> str:
+        state = mock_infra.get(require_incident_id())
+        return _dumps({"mysql": state["mysql"], "note": note})
+
+
+class GetNginxStatusTool(BaseTool):
+    name: str = "get_nginx_status"
+    description: str = "Inspect nginx status and upstream health."
+    args_schema: Type[BaseModel] = EmptyInput
+
+    def _run(self, note: str = "") -> str:
+        state = mock_infra.get(require_incident_id())
+        return _dumps({"nginx": state["nginx"], "note": note})
+
+
+class GetEc2StatusTool(BaseTool):
+    name: str = "get_ec2_status"
+    description: str = "Inspect EC2 instance state and status checks."
+    args_schema: Type[BaseModel] = EmptyInput
+
+    def _run(self, note: str = "") -> str:
+        state = mock_infra.get(require_incident_id())
+        return _dumps({"ec2": state["ec2"], "region": state.get("region"), "note": note})
+
+
+class HealthCheckTool(BaseTool):
+    name: str = "health_check"
+    description: str = "HTTP health check against the application endpoint."
+    args_schema: Type[BaseModel] = EmptyInput
+
+    def _run(self, note: str = "") -> str:
+        state = mock_infra.get(require_incident_id())
+        return _dumps({"health": state["health"], "note": note})
+
+
 class RestartPm2ProcessTool(BaseTool):
     name: str = "restart_pm2_process"
     description: str = (
@@ -151,6 +285,59 @@ class RestartPm2ProcessTool(BaseTool):
 
     def _run(self, process_name: str) -> str:
         result = mock_infra.restart_pm2_process(require_incident_id(), process_name)
+        return _dumps(result)
+
+
+class ClearTempFilesTool(BaseTool):
+    name: str = "clear_temp_files"
+    description: str = "Clear temporary files on the host (low risk)."
+    args_schema: Type[BaseModel] = EmptyInput
+
+    def _run(self, note: str = "") -> str:
+        result = mock_infra.clear_temp_files(require_incident_id())
+        result["note"] = note
+        return _dumps(result)
+
+
+class RotateLogsTool(BaseTool):
+    name: str = "rotate_logs"
+    description: str = "Rotate application/system logs (low risk)."
+    args_schema: Type[BaseModel] = EmptyInput
+
+    def _run(self, note: str = "") -> str:
+        result = mock_infra.rotate_logs(require_incident_id())
+        result["note"] = note
+        return _dumps(result)
+
+
+class RestartMysqlTool(BaseTool):
+    name: str = "restart_mysql"
+    description: str = "Restart MySQL service (medium risk; requires human approval)."
+    args_schema: Type[BaseModel] = EmptyInput
+
+    def _run(self, note: str = "") -> str:
+        result = mock_infra.restart_mysql(require_incident_id())
+        result["note"] = note
+        return _dumps(result)
+
+
+class ScaleEc2Tool(BaseTool):
+    name: str = "scale_ec2"
+    description: str = "Scale EC2/ASG capacity (medium risk; requires human approval)."
+    args_schema: Type[BaseModel] = ScaleInput
+
+    def _run(self, desired_capacity: int) -> str:
+        result = mock_infra.scale_ec2(require_incident_id(), desired_capacity)
+        return _dumps(result)
+
+
+class ChangeConfigurationTool(BaseTool):
+    name: str = "change_configuration"
+    description: str = "Change a runtime configuration value (medium risk; requires approval)."
+    args_schema: Type[BaseModel] = ConfigInput
+
+    def _run(self, key: str, value: str) -> str:
+        result = mock_infra.change_configuration(require_incident_id(), key, value)
         return _dumps(result)
 
 
@@ -175,15 +362,90 @@ def build_read_tools() -> list[BaseTool]:
     return [
         GetCloudWatchAlarmTool(),
         GetCloudWatchMetricTool(),
-        QueryLogsTool(),
+        GetCpuUsageTool(),
+        GetMemoryUsageTool(),
+        GetDiskUsageTool(),
+        GetSwapUsageTool(),
         GetSystemMetricsTool(),
+        GetProcessesTool(),
+        GetProcessMemoryTool(),
+        QueryLogsTool(),
         GetPm2StatusTool(),
+        GetPm2LogsTool(),
+        GetMysqlStatusTool(),
+        GetNginxStatusTool(),
+        GetEc2StatusTool(),
+        HealthCheckTool(),
     ]
 
 
+def build_monitoring_tools() -> list[BaseTool]:
+    return [
+        GetCloudWatchAlarmTool(),
+        GetCloudWatchMetricTool(),
+        GetCpuUsageTool(),
+        GetMemoryUsageTool(),
+        GetDiskUsageTool(),
+        GetSwapUsageTool(),
+        GetSystemMetricsTool(),
+        HealthCheckTool(),
+    ]
+
+
+def build_log_tools() -> list[BaseTool]:
+    return [QueryLogsTool(), GetPm2LogsTool()]
+
+
+def build_infra_tools() -> list[BaseTool]:
+    return [
+        GetEc2StatusTool(),
+        GetNginxStatusTool(),
+        GetPm2StatusTool(),
+        GetProcessesTool(),
+        GetProcessMemoryTool(),
+        GetSystemMetricsTool(),
+    ]
+
+
+def build_database_tools() -> list[BaseTool]:
+    return [GetMysqlStatusTool(), QueryLogsTool()]
+
+
 def build_action_tools() -> list[BaseTool]:
-    return [RestartPm2ProcessTool()]
+    return [
+        RestartPm2ProcessTool(),
+        ClearTempFilesTool(),
+        RotateLogsTool(),
+        RestartMysqlTool(),
+        ScaleEc2Tool(),
+        ChangeConfigurationTool(),
+    ]
 
 
 def build_report_tools() -> list[BaseTool]:
     return [CreateIncidentReportTool()]
+
+
+def execute_action_tool(tool_name: str, parameters: dict[str, Any] | None) -> str:
+    """Execute an allowlisted write tool by name (policy must already have approved)."""
+    parameters = parameters or {}
+    if tool_name == "restart_pm2_process":
+        return RestartPm2ProcessTool()._run(
+            process_name=str(parameters.get("process_name", "api"))
+        )
+    if tool_name == "clear_temp_files":
+        return ClearTempFilesTool()._run()
+    if tool_name == "rotate_logs":
+        return RotateLogsTool()._run()
+    if tool_name == "restart_mysql":
+        return RestartMysqlTool()._run()
+    if tool_name == "scale_ec2":
+        return ScaleEc2Tool()._run(
+            desired_capacity=int(parameters.get("desired_capacity", 2))
+        )
+    if tool_name == "change_configuration":
+        return ChangeConfigurationTool()._run(
+            key=str(parameters.get("key", "")),
+            value=str(parameters.get("value", "")),
+        )
+    raise ValueError(f"No executor registered for tool '{tool_name}'")

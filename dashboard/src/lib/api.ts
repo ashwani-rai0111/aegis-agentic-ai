@@ -65,3 +65,14 @@ export function approveIncident(id: string, approvedBy = "dashboard-operator") {
     body: JSON.stringify({ approved_by: approvedBy }),
   });
 }
+
+export function rejectIncident(
+  id: string,
+  rejectedBy = "dashboard-operator",
+  reason = "Operator rejected remediation plan",
+) {
+  return request<IncidentDetail>(`/incidents/${id}/reject`, {
+    method: "POST",
+    body: JSON.stringify({ rejected_by: rejectedBy, reason }),
+  });
+}

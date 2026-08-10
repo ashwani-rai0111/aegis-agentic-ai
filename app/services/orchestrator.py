@@ -4,10 +4,15 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
-from app.agents.crew import run_crewai_incident
-from app.agents.deterministic import run_deterministic_incident
+from app.agents.crew import resume_crewai_incident, run_crewai_incident
+from app.agents.deterministic import (
+    resume_deterministic_incident,
+    run_deterministic_incident,
+)
 from app.config import get_settings
+from app.models.enums import IncidentStatus
 from app.services.incident_service import IncidentService
+from app.services.remediation import execute_approved_plan, reject_plan
 from app.tools.mock_state import mock_infra
 
 
@@ -51,4 +56,53 @@ def simulate_incident(
         "agent_mode": agent_mode,
         "result": result,
         "incident": detail,
+    }
+
+
+def approve_and_resume(
+    db: Session,
+    incident_id: str,
+    *,
+    approved_by: str,
+) -> dict[str, Any]:
+    service = IncidentService(db)
+    incident = service.get(incident_id)
+    if not incident:
+        raise ValueError("Incident not found")
+    if incident.status != IncidentStatus.AWAITING_APPROVAL.value:
+        raise ValueError(
+            f"Incident is not awaiting approval (status={incident.status})"
+        )
+
+    service.approve_latest_plan(incident_id, approved_by)
+
+    mode = (incident.agent_mode or resolve_agent_mode()).lower()
+    if mode == "crewai":
+        result = resume_crewai_incident(db, incident_id)
+    else:
+        result = resume_deterministic_incident(db, incident_id)
+
+    # Fallback if resume helpers change
+    if not result:
+        result = execute_approved_plan(db, incident_id, already_approved=True)
+
+    return {
+        "result": result,
+        "incident": service.get(incident_id),
+    }
+
+
+def reject_and_escalate(
+    db: Session,
+    incident_id: str,
+    *,
+    rejected_by: str,
+    reason: str,
+) -> dict[str, Any]:
+    result = reject_plan(
+        db, incident_id, rejected_by=rejected_by, reason=reason
+    )
+    return {
+        "result": result,
+        "incident": IncidentService(db).get(incident_id),
     }

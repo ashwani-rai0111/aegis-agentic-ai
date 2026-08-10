@@ -18,6 +18,34 @@ def test_allowlisted_pm2_restart_auto_approved():
     assert decision.risk.value == "LOW"
 
 
+def test_low_risk_clear_temp_auto():
+    decision = evaluate_action("clear_temp_files", {})
+    assert decision.allowed is True
+    assert decision.approval_required is False
+    assert decision.risk.value == "LOW"
+
+
+def test_medium_risk_mysql_requires_approval():
+    decision = evaluate_action("restart_mysql", {})
+    assert decision.allowed is False
+    assert decision.approval_required is True
+    assert decision.risk.value == "MEDIUM"
+
+
+def test_medium_risk_mysql_allowed_after_approval():
+    decision = evaluate_action("restart_mysql", {}, already_approved=True)
+    assert decision.allowed is True
+    assert decision.risk.value == "MEDIUM"
+
+
+def test_critical_action_never_auto_even_if_approved():
+    decision = evaluate_action(
+        "drop_database", {}, already_approved=True
+    )
+    assert decision.allowed is False
+    assert decision.risk.value == "CRITICAL"
+
+
 def test_unknown_action_blocked():
     decision = evaluate_action("rm_rf_production", {})
     assert decision.allowed is False

@@ -1,4 +1,4 @@
-"""CrewAI multi-agent incident response crew."""
+"""CrewAI multi-agent incident response crew (full specialized roster)."""
 
 from __future__ import annotations
 
@@ -14,9 +14,16 @@ from app.config import get_settings
 from app.models.enums import IncidentStatus
 from app.policies.safety import evaluate_action
 from app.services.incident_service import IncidentService
+from app.services.remediation import execute_approved_plan
 from app.tools.context import current_incident_id
 from app.tools.mock_state import mock_infra
-from app.tools.ops_tools import build_read_tools
+from app.tools.ops_tools import (
+    build_database_tools,
+    build_infra_tools,
+    build_log_tools,
+    build_monitoring_tools,
+    build_read_tools,
+)
 
 
 def _extract_json(text: str) -> dict[str, Any]:
@@ -31,7 +38,7 @@ def _extract_json(text: str) -> dict[str, Any]:
 
 
 def run_crewai_incident(db: Session, incident_id: str) -> dict[str, Any]:
-    """Run CrewAI for reasoning, with Python-enforced safety + action execution."""
+    """Run CrewAI for reasoning; Python enforces safety + recovery + verification."""
     settings = get_settings()
     if settings.openai_api_key:
         os.environ["OPENAI_API_KEY"] = settings.openai_api_key
@@ -43,22 +50,23 @@ def run_crewai_incident(db: Session, incident_id: str) -> dict[str, Any]:
         raise ValueError(f"Incident not found: {incident_id}")
 
     token = current_incident_id.set(incident_id)
-    before = mock_infra.get(incident_id)
-    before_latency = str(before["metrics"]["api_p95_latency_ms"])
-    before_memory = str(before["metrics"]["memory_utilization"])
-    before_alarm = before["alarm"]["state"]
-
     try:
         service.transition(incident, IncidentStatus.TRIAGING)
         service.transition(incident, IncidentStatus.INVESTIGATING)
 
-        # Phase 1: monitoring + investigation + RCA + plan via CrewAI
-        reasoning_crew = _build_reasoning_crew(settings.aegis_verbose)
-        reasoning_result = reasoning_crew.kickoff(
-            inputs={"incident_id": incident_id, "service": incident.service}
+        crew = _build_full_crew(settings.aegis_verbose)
+        state = mock_infra.get(incident_id)
+        result = crew.kickoff(
+            inputs={
+                "incident_id": incident_id,
+                "service": incident.service,
+                "scenario": incident.scenario,
+                "alarm_name": state["alarm"]["alarm_name"],
+            }
         )
-        plan_output = _task_raw(reasoning_result, -1)
-        rca_output = _task_raw(reasoning_result, -2)
+
+        plan_output = _task_raw(result, -1)
+        rca_output = _task_raw(result, -2)
 
         try:
             rca_data = _extract_json(rca_output)
@@ -66,14 +74,14 @@ def run_crewai_incident(db: Session, incident_id: str) -> dict[str, Any]:
             rca_data = {
                 "hypotheses": [
                     {
-                        "hypothesis": "Unhealthy API process memory pressure",
+                        "hypothesis": "Unhealthy Node API process memory pressure",
                         "evidence_for": rca_output[:500],
                         "evidence_against": "n/a",
                         "score": 0.7,
                         "selected": True,
                     }
                 ],
-                "root_cause": "Unhealthy API process memory pressure",
+                "root_cause": "Unhealthy Node API process memory pressure",
                 "confidence": 0.7,
             }
 
@@ -106,14 +114,17 @@ def run_crewai_incident(db: Session, incident_id: str) -> dict[str, Any]:
 
         service.transition(incident, IncidentStatus.PLAN_READY)
         proposed_action = str(plan_data.get("proposed_action", "restart_pm2_process"))
-        parameters = plan_data.get("parameters") or {"process_name": "api"}
+        parameters = plan_data.get("parameters") or {}
+        if proposed_action == "restart_pm2_process" and "process_name" not in parameters:
+            parameters = {"process_name": "api"}
+
         decision = evaluate_action(
             proposed_action,
             parameters,
             already_approved=False,
             actions_already_taken=service.count_actions(incident_id),
         )
-        plan = service.add_plan(
+        service.add_plan(
             incident_id,
             proposed_action=proposed_action,
             parameters=parameters,
@@ -121,10 +132,11 @@ def run_crewai_incident(db: Session, incident_id: str) -> dict[str, Any]:
             rationale=str(plan_data.get("rationale", "")),
             approval_required=decision.approval_required,
             approved=decision.allowed and not decision.approval_required,
-            approved_by="policy-auto" if decision.allowed else None,
+            approved_by="policy-auto" if decision.allowed and not decision.approval_required else None,
         )
 
-        # Persist key observations from mock state for timeline completeness
+        # Persist a compact observation set for the timeline
+        before = mock_infra.get(incident_id)
         for key, value in before["metrics"].items():
             service.add_observation(
                 incident_id,
@@ -137,166 +149,209 @@ def run_crewai_incident(db: Session, incident_id: str) -> dict[str, Any]:
             incident_id,
             source="cloudwatch",
             name="alarm",
-            value=before_alarm,
+            value=before["alarm"]["state"],
             evidence=before["alarm"],
         )
-
-        if decision.approval_required and not plan.approved:
-            service.transition(incident, IncidentStatus.AWAITING_APPROVAL)
-            return {"status": IncidentStatus.AWAITING_APPROVAL.value}
-
-        if not decision.allowed:
-            service.finalize(
-                incident,
-                status=IncidentStatus.ESCALATED,
-                summary="Safety policy blocked the proposed remediation",
-                root_cause=root_cause,
-                confidence=confidence,
-            )
-            return {"status": IncidentStatus.ESCALATED.value, "reason": decision.reason}
-
-        service.transition(incident, IncidentStatus.EXECUTING)
-        from app.tools.ops_tools import RestartPm2ProcessTool
-
-        action_raw = RestartPm2ProcessTool()._run(
-            process_name=str(parameters.get("process_name", "api"))
-        )
-        action_result = json.loads(action_raw)
-        service.add_action(
+        service.add_observation(
             incident_id,
-            tool=proposed_action,
-            parameters=parameters,
-            approved_by=plan.approved_by or "policy-auto",
-            result=action_raw,
-            success=bool(action_result.get("success")),
+            source="crew",
+            name="investigation_summary",
+            value=str(result)[:2000],
+            evidence={"crew_raw": str(result)[:4000]},
         )
 
-        service.transition(incident, IncidentStatus.VERIFYING)
-        after = mock_infra.get(incident_id)
-        latency_ok = float(after["metrics"]["api_p95_latency_ms"]) < 500
-        memory_ok = float(after["metrics"]["memory_utilization"]) < 75
-        alarm_ok = after["alarm"]["state"] == "OK"
-        recovered = latency_ok and memory_ok and alarm_ok
-
-        service.add_verification(
+        outcome = execute_approved_plan(
+            db,
             incident_id,
-            metric="api_p95_latency_ms",
-            before_value=before_latency,
-            after_value=str(after["metrics"]["api_p95_latency_ms"]),
-            success=latency_ok,
+            already_approved=False,
+            summary=(
+                "CrewAI specialized agents (monitoring, logs, infra, database, diagnosis, "
+                "planner) investigated with tools; recovery/verification ran under safety policy."
+            ),
         )
-        service.add_verification(
-            incident_id,
-            metric="memory_utilization",
-            before_value=before_memory,
-            after_value=str(after["metrics"]["memory_utilization"]),
-            success=memory_ok,
-        )
-        service.add_verification(
-            incident_id,
-            metric="alarm_state",
-            before_value=before_alarm,
-            after_value=after["alarm"]["state"],
-            success=alarm_ok,
-        )
-
-        summary = (
-            "CrewAI agents investigated the alarm, selected a root cause, proposed a "
-            "safe remediation, executed an allowlisted action, and verified recovery."
-        )
-        final_status = IncidentStatus.RECOVERED if recovered else IncidentStatus.FAILED
-        service.finalize(
-            incident,
-            status=final_status,
-            summary=summary,
-            root_cause=root_cause,
-            confidence=confidence,
-        )
-        return {
-            "status": final_status.value,
-            "root_cause": root_cause,
-            "confidence": confidence,
-            "crew_raw": str(reasoning_result),
-        }
+        outcome["crew_raw"] = str(result)
+        return outcome
     finally:
         current_incident_id.reset(token)
 
 
-def _build_reasoning_crew(verbose: bool) -> Crew:
-    read_tools = build_read_tools()
+def resume_crewai_incident(db: Session, incident_id: str) -> dict[str, Any]:
+    return execute_approved_plan(db, incident_id, already_approved=True)
+
+
+def _build_full_crew(verbose: bool) -> Crew:
+    monitoring_tools = build_monitoring_tools()
+    log_tools = build_log_tools()
+    infra_tools = build_infra_tools()
+    db_tools = build_database_tools()
+    # Diagnosis/planner can review any read tool output via context; give diagnosis broad reads.
+    diagnosis_tools = build_read_tools()
+
+    incident_manager = Agent(
+        role="Incident Manager Agent",
+        goal="Understand what is happening and coordinate a focused investigation.",
+        backstory=(
+            "Senior incident commander. Summarizes the alarm, sets investigation priorities, "
+            "and never jumps to remediation before evidence is collected."
+        ),
+        allow_delegation=False,
+        verbose=verbose,
+    )
     monitoring = Agent(
         role="Monitoring Agent",
-        goal="Confirm alarm and capture CloudWatch symptoms.",
-        backstory="SRE monitoring specialist who always uses tools.",
-        tools=read_tools,
+        goal="Gather CloudWatch/host metrics and HTTP health signals.",
+        backstory="SRE monitoring specialist who always uses tools before concluding.",
+        tools=monitoring_tools,
         allow_delegation=False,
         verbose=verbose,
     )
-    investigation = Agent(
-        role="Investigation Agent",
-        goal="Collect host/PM2/log evidence.",
-        backstory="Careful investigator of production incidents.",
-        tools=read_tools,
+    log_analyst = Agent(
+        role="Log Analyst Agent",
+        goal="Analyze application and PM2 logs to identify error patterns.",
+        backstory="Log forensics specialist who correlates timestamps with symptoms.",
+        tools=log_tools,
         allow_delegation=False,
         verbose=verbose,
     )
-    rca = Agent(
-        role="Root Cause Analysis Agent",
+    infra = Agent(
+        role="Infrastructure Agent",
+        goal="Investigate EC2, nginx, PM2, and top host processes.",
+        backstory=(
+            "Infrastructure engineer. Uses tools based on current state — if memory is high, "
+            "inspect processes; if HTTP is bad, check nginx and EC2."
+        ),
+        tools=infra_tools,
+        allow_delegation=False,
+        verbose=verbose,
+    )
+    database = Agent(
+        role="Database Agent",
+        goal="Investigate MySQL before anyone restarts application processes.",
+        backstory=(
+            "DBA on-call. Checks connections, buffer pool, and threads. Can clear MySQL as "
+            "a culprit when it looks healthy."
+        ),
+        tools=db_tools,
+        allow_delegation=False,
+        verbose=verbose,
+    )
+    diagnosis = Agent(
+        role="Diagnosis Agent",
         goal="Select the most probable root cause with scored hypotheses.",
-        backstory="Evidence-driven RCA specialist.",
+        backstory=(
+            "Evidence-driven RCA specialist. Performs differential diagnosis: do not blame "
+            "MySQL if connections are healthy; prefer Node/PM2 when the api process is unhealthy."
+        ),
+        tools=diagnosis_tools,
         allow_delegation=False,
         verbose=verbose,
     )
     planner = Agent(
-        role="Planning Agent",
-        goal="Propose lowest-risk allowlisted remediation.",
+        role="Decision / Planner Agent",
+        goal="Propose the lowest-risk allowlisted remediation with clear risk tier.",
         backstory=(
-            "Prefers restart_pm2_process on api when memory/latency and unhealthy "
-            "PM2 api process are present."
+            "Prefers LOW risk actions (restart_pm2_process, clear_temp_files, rotate_logs). "
+            "Uses MEDIUM actions (restart_mysql, scale_ec2, change_configuration) only when "
+            "evidence requires them and notes approval_required=true. Never proposes "
+            "DROP DATABASE, terminate EC2, delete data, or modify IAM."
         ),
         allow_delegation=False,
         verbose=verbose,
     )
 
+    manage_task = Task(
+        description=(
+            "Incident {incident_id} for service {service} (scenario={scenario}). "
+            "As Incident Manager, state what appears to be happening from the alarm name "
+            "'{alarm_name}' and list the investigation questions for monitoring, logs, "
+            "infra, and database agents. Return a short JSON brief with keys: "
+            "situation, priorities."
+        ),
+        expected_output="JSON investigation brief",
+        agent=incident_manager,
+    )
     monitor_task = Task(
         description=(
-            "For incident {incident_id}, call get_cloudwatch_alarm "
-            "(alarm_name=prod-api-high-latency) and get_cloudwatch_metric for "
-            "memory_utilization and api_p95_latency_ms. Return JSON."
+            "For incident {incident_id}, use tools to confirm alarm '{alarm_name}', "
+            "collect cpu/memory/swap/disk and cloudwatch metrics, and run health_check. "
+            "Decide which metrics matter based on the Incident Manager brief. Return JSON."
         ),
-        expected_output="JSON with alarm and metrics",
+        expected_output="JSON with alarm, metrics, health",
         agent=monitoring,
+        context=[manage_task],
     )
-    investigate_task = Task(
+    logs_task = Task(
         description=(
-            "Investigate incident {incident_id} for service {service}. "
-            "Use get_system_metrics, get_pm2_status, query_logs. Return JSON evidence."
+            "Analyze logs for service {service}. Call query_logs and get_pm2_logs for "
+            "process_name=api. Highlight patterns that support or refute memory pressure "
+            "vs database failures. Return JSON evidence."
         ),
-        expected_output="JSON evidence bundle",
-        agent=investigation,
-        context=[monitor_task],
+        expected_output="JSON log analysis",
+        agent=log_analyst,
+        context=[manage_task, monitor_task],
+    )
+    infra_task = Task(
+        description=(
+            "Investigate infrastructure for incident {incident_id}. Based on monitoring "
+            "findings, call get_ec2_status, get_nginx_status, get_process_memory / "
+            "get_processes, and get_pm2_status. Return JSON with key findings."
+        ),
+        expected_output="JSON infra evidence",
+        agent=infra,
+        context=[manage_task, monitor_task],
+    )
+    db_task = Task(
+        description=(
+            "Investigate MySQL for incident {incident_id}. Call get_mysql_status (and "
+            "query_logs if needed). Explicitly conclude whether MySQL is healthy or the "
+            "likely root cause. Return JSON."
+        ),
+        expected_output="JSON MySQL assessment",
+        agent=database,
+        context=[manage_task, monitor_task, logs_task],
     )
     rca_task = Task(
         description=(
-            "Produce scored hypotheses and select root cause. Return JSON with "
-            "hypotheses, root_cause, confidence."
+            "Using all prior evidence, produce scored hypotheses and select root cause. "
+            "Return JSON with hypotheses[], root_cause, confidence. Prefer Node/PM2 api "
+            "memory issues when MySQL is healthy; prefer MySQL remediation when DB is degraded."
         ),
         expected_output="JSON RCA result",
-        agent=rca,
-        context=[investigate_task],
+        agent=diagnosis,
+        context=[monitor_task, logs_task, infra_task, db_task],
     )
     plan_task = Task(
         description=(
-            "Propose remediation JSON with proposed_action, parameters, risk, "
-            "rationale, approval_required. Prefer restart_pm2_process process_name=api."
+            "Propose remediation JSON with proposed_action, parameters, risk "
+            "(LOW|MEDIUM|HIGH|CRITICAL), rationale, approval_required. "
+            "Allowlisted actions only: restart_pm2_process (process_name api|worker), "
+            "clear_temp_files, rotate_logs, restart_mysql, scale_ec2, change_configuration. "
+            "Never propose destructive actions."
         ),
         expected_output="JSON plan",
         agent=planner,
         context=[rca_task],
     )
+
     return Crew(
-        agents=[monitoring, investigation, rca, planner],
-        tasks=[monitor_task, investigate_task, rca_task, plan_task],
+        agents=[
+            incident_manager,
+            monitoring,
+            log_analyst,
+            infra,
+            database,
+            diagnosis,
+            planner,
+        ],
+        tasks=[
+            manage_task,
+            monitor_task,
+            logs_task,
+            infra_task,
+            db_task,
+            rca_task,
+            plan_task,
+        ],
         process=Process.sequential,
         verbose=verbose,
     )

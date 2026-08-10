@@ -114,3 +114,8 @@ class IncidentDetail(IncidentSummary):
 
 class ApproveRequest(BaseModel):
     approved_by: str = "human-operator"
+
+
+class RejectRequest(BaseModel):
+    rejected_by: str = "human-operator"
+    reason: str = "Operator rejected remediation plan"
