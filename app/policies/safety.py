@@ -28,11 +28,11 @@ READ_ONLY_TOOLS = {
 
 # Green / yellow / red style controls for production-grade autonomy.
 ALLOWLISTED_ACTIONS: dict[str, dict[str, Any]] = {
-    # LOW — agent may auto-execute
+    # LOW — agent may auto-execute (process allowlist comes from settings)
     "restart_pm2_process": {
         "risk": RiskLevel.LOW,
         "approval_required": False,
-        "allowed_params": {"process_name": {"api", "worker"}},
+        "allowed_params": {"process_name": "FROM_SETTINGS"},
     },
     "clear_temp_files": {
         "risk": RiskLevel.LOW,
@@ -146,6 +146,8 @@ def evaluate_action(
                 risk=risk,
                 reason=f"Missing required parameter '{key}'",
             )
+        if allowed_values == "FROM_SETTINGS":
+            allowed_values = settings.pm2_allowlist()
         if allowed_values and parameters[key] not in allowed_values:
             return SafetyDecision(
                 allowed=False,

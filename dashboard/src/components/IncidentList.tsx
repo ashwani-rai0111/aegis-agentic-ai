@@ -6,6 +6,7 @@ import { fetchIncidents } from "@/lib/api";
 import { confidenceLabel, formatTime, shortId } from "@/lib/format";
 import type { IncidentSummary } from "@/lib/types";
 import { SeverityBadge, StatusBadge } from "./Badges";
+import { InvestigateBox } from "./InvestigateBox";
 import { SimulateButton } from "./SimulateButton";
 
 export function IncidentList() {
@@ -48,11 +49,15 @@ export function IncidentList() {
             Incident console
           </h1>
           <p className="text-base leading-relaxed text-mist-300">
-            Watch Aegis investigate, decide, act, and verify. Simulate a mock
-            CloudWatch incident to run the full agent loop.
+            Describe a real issue (e.g. Signyn website down) or simulate a mock
+            CloudWatch incident. Aegis investigates, decides, acts, and verifies.
           </p>
         </div>
         <SimulateButton onDone={load} />
+      </section>
+
+      <section className="animate-fade-up">
+        <InvestigateBox onDone={load} />
       </section>
 
       <section className="grid gap-3 sm:grid-cols-3">

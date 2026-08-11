@@ -1,9 +1,9 @@
 from fastapi import APIRouter
 
-from app.config import get_settings
 from app.database.session import check_db
 from app.models.schemas import HealthResponse
-from app.services.orchestrator import resolve_agent_mode
+from app.services.orchestrator import resolve_agent_mode, resolve_tool_backend
+from app.tools.backend import aws_settings_ready
 
 router = APIRouter(tags=["health"])
 
@@ -15,4 +15,6 @@ def health() -> HealthResponse:
         status="ok" if db_ok else "degraded",
         database="up" if db_ok else "down",
         agent_mode=resolve_agent_mode(),
+        tool_backend=resolve_tool_backend(),
+        aws_configured=aws_settings_ready(),
     )

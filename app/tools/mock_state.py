@@ -53,6 +53,9 @@ _API_MEMORY_PRESSURE: dict[str, Any] = {
         "slow_queries_1h": 3,
         "threads_running": 2,
         "healthy": True,
+        "severe": False,
+        "production": {"database": "signyards", "healthy": True},
+        "staging": {"database": "uatsignyards", "healthy": True},
     },
     "nginx": {
         "status": "active",
@@ -145,7 +148,11 @@ _MYSQL_RESTART_REQUIRED: dict[str, Any] = {
         "slow_queries_1h": 240,
         "threads_running": 180,
         "healthy": False,
+        "severe": True,
         "last_error": "Too many connections / thread pileup",
+        "reasons": ["connections saturated", "threads_running high"],
+        "production": {"database": "signyards", "healthy": False},
+        "staging": {"database": "uatsignyards", "healthy": False},
     },
     "nginx": {
         "status": "active",
@@ -226,6 +233,10 @@ class MockInfrastructure:
             )
         with self._lock:
             self._incidents[incident_id] = deepcopy(_SCENARIO_TEMPLATES[scenario])
+
+    def has(self, incident_id: str) -> bool:
+        with self._lock:
+            return incident_id in self._incidents
 
     def get(self, incident_id: str) -> dict[str, Any]:
         with self._lock:
@@ -318,6 +329,9 @@ class MockInfrastructure:
                 "slow_queries_1h": 1,
                 "threads_running": 2,
                 "healthy": True,
+                "severe": False,
+                "production": {"database": "signyards", "healthy": True},
+                "staging": {"database": "uatsignyards", "healthy": True},
             }
             for proc in state["processes"]:
                 if proc["name"] == "mysqld":

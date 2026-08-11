@@ -10,44 +10,80 @@ from sqlalchemy.orm import Session
 from app.models.enums import IncidentStatus
 from app.policies.safety import evaluate_action
 from app.services.incident_service import IncidentService
+from app.tools.backend import get_tool_backend
 from app.tools.context import current_incident_id
-from app.tools.mock_state import mock_infra
-from app.tools.ops_tools import HealthCheckTool, execute_action_tool
+from app.tools.ops_tools import execute_action_tool
+
+
+def _as_float(value: Any, default: float = 0.0) -> float:
+    try:
+        if value is None:
+            return default
+        return float(value)
+    except (TypeError, ValueError):
+        return default
 
 
 def verify_recovery(incident_id: str, before: dict[str, Any]) -> dict[str, Any]:
-    after = mock_infra.get(incident_id)
-    health = json.loads(HealthCheckTool()._run())
-    latency_ok = float(after["metrics"]["api_p95_latency_ms"]) < 500
-    memory_ok = float(after["metrics"]["memory_utilization"]) < 75
-    alarm_ok = after["alarm"]["state"] == "OK"
-    http_ok = int(health["health"]["http_status"]) == 200
-    pm2_ok = all(not p.get("unhealthy") for p in after["pm2"]["processes"])
-    mysql_ok = bool(after.get("mysql", {}).get("healthy", True))
+    backend = get_tool_backend(incident_id)
+    after = backend.snapshot()
+    health = backend.health_check()
+    before_metrics = before.get("metrics") or {}
+    after_metrics = after.get("metrics") or {}
+
+    latency_after = after_metrics.get("api_p95_latency_ms")
+    memory_after = after_metrics.get("memory_utilization")
+    # If latency metric is unavailable on AWS, do not fail solely on it.
+    latency_ok = (
+        True
+        if latency_after is None
+        else _as_float(latency_after, 9999) < 500
+    )
+    memory_ok = (
+        True
+        if memory_after is None
+        else _as_float(memory_after, 100) < 75
+    )
+    alarm_ok = str(after.get("alarm", {}).get("state", "")).upper() in {
+        "OK",
+        "INSUFFICIENT_DATA",
+    }
+    http_status = int(health.get("health", {}).get("http_status") or 0)
+    # If health URL not configured (0), skip HTTP gate for AWS.
+    http_ok = http_status == 200 or http_status == 0
+    pm2_procs = after.get("pm2", {}).get("processes") or []
+    pm2_ok = all(not p.get("unhealthy") for p in pm2_procs) if pm2_procs else True
+    mysql_after = after.get("mysql") or {}
+    mysql_ok = bool(mysql_after.get("healthy", True))
     recovered = latency_ok and memory_ok and alarm_ok and http_ok and pm2_ok and mysql_ok
     return {
         "after": after,
         "health": health,
         "checks": {
             "api_p95_latency_ms": (
-                str(before["metrics"]["api_p95_latency_ms"]),
-                str(after["metrics"]["api_p95_latency_ms"]),
+                str(before_metrics.get("api_p95_latency_ms", "?")),
+                str(latency_after if latency_after is not None else "n/a"),
                 latency_ok,
             ),
             "memory_utilization": (
-                str(before["metrics"]["memory_utilization"]),
-                str(after["metrics"]["memory_utilization"]),
+                str(before_metrics.get("memory_utilization", "?")),
+                str(memory_after if memory_after is not None else "n/a"),
                 memory_ok,
             ),
             "alarm_state": (
-                before["alarm"]["state"],
-                after["alarm"]["state"],
+                str(before.get("alarm", {}).get("state", "?")),
+                str(after.get("alarm", {}).get("state", "?")),
                 alarm_ok,
             ),
             "http_health": (
                 str(before.get("health", {}).get("http_status", "?")),
-                str(health["health"]["http_status"]),
+                str(http_status),
                 http_ok,
+            ),
+            "mysql": (
+                str((before.get("mysql") or {}).get("status", "?")),
+                str(mysql_after.get("status", "?")),
+                mysql_ok,
             ),
         },
         "recovered": recovered,
@@ -61,11 +97,7 @@ def execute_approved_plan(
     already_approved: bool = False,
     summary: str | None = None,
 ) -> dict[str, Any]:
-    """Run safety check → execute tool → verify → finalize.
-
-    Caller must ensure incident is at PLAN_READY or AWAITING_APPROVAL/EXECUTING
-    as appropriate. This function transitions EXECUTING → VERIFYING → terminal.
-    """
+    """Run safety check → execute tool → verify → finalize."""
     service = IncidentService(db)
     incident = service.get(incident_id)
     if not incident:
@@ -77,7 +109,7 @@ def execute_approved_plan(
 
     token = current_incident_id.set(incident_id)
     try:
-        before = mock_infra.get(incident_id)
+        before = get_tool_backend(incident_id).snapshot()
         decision = evaluate_action(
             plan.proposed_action,
             plan.parameters or {},
@@ -114,7 +146,6 @@ def execute_approved_plan(
             service.transition(incident, IncidentStatus.EXECUTING)
         elif incident.status == IncidentStatus.AWAITING_APPROVAL.value:
             service.transition(incident, IncidentStatus.EXECUTING)
-        # If already EXECUTING (post-approve), continue.
 
         action_raw = execute_action_tool(plan.proposed_action, plan.parameters or {})
         action_result = json.loads(action_raw)
@@ -122,7 +153,8 @@ def execute_approved_plan(
             incident_id,
             tool=plan.proposed_action,
             parameters=plan.parameters or {},
-            approved_by=plan.approved_by or ("policy-auto" if not decision.approval_required else None),
+            approved_by=plan.approved_by
+            or ("policy-auto" if not decision.approval_required else None),
             result=action_raw,
             success=bool(action_result.get("success")),
         )

@@ -41,12 +41,14 @@ ALLOWED_TRANSITIONS: dict[IncidentStatus, set[IncidentStatus]] = {
         IncidentStatus.PLAN_READY,
         IncidentStatus.FAILED,
         IncidentStatus.ESCALATED,
+        IncidentStatus.RECOVERED,
     },
     IncidentStatus.PLAN_READY: {
         IncidentStatus.AWAITING_APPROVAL,
         IncidentStatus.EXECUTING,
         IncidentStatus.ESCALATED,
         IncidentStatus.FAILED,
+        IncidentStatus.RECOVERED,
     },
     IncidentStatus.AWAITING_APPROVAL: {
         IncidentStatus.EXECUTING,

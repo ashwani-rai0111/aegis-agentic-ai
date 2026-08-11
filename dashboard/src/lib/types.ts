@@ -82,4 +82,6 @@ export type HealthResponse = {
   status: string;
   database: string;
   agent_mode: string;
+  tool_backend: string;
+  aws_configured: boolean;
 };

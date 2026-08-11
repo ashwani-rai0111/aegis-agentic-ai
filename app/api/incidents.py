@@ -6,13 +6,17 @@ from app.models.schemas import (
     ApproveRequest,
     IncidentDetail,
     IncidentSummary,
+    InvestigateRequest,
+    LiveIncidentRequest,
     RejectRequest,
     SimulateRequest,
 )
 from app.services.incident_service import IncidentService
 from app.services.orchestrator import (
     approve_and_resume,
+    investigate_user_issue,
     reject_and_escalate,
+    run_live_incident,
     simulate_incident,
 )
 
@@ -36,6 +40,51 @@ def simulate(payload: SimulateRequest, db: Session = Depends(get_db)) -> Inciden
     incident = outcome["incident"]
     if not incident:
         raise HTTPException(status_code=500, detail="Incident missing after simulation")
+    return IncidentDetail.model_validate(incident)
+
+
+@router.post("/live", response_model=IncidentDetail)
+def live_incident(
+    payload: LiveIncidentRequest, db: Session = Depends(get_db)
+) -> IncidentDetail:
+    try:
+        outcome = run_live_incident(
+            db,
+            service=payload.service,
+            severity=payload.severity,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:  # pragma: no cover
+        raise HTTPException(status_code=500, detail=f"Live incident failed: {exc}") from exc
+
+    incident = outcome["incident"]
+    if not incident:
+        raise HTTPException(status_code=500, detail="Incident missing after live run")
+    return IncidentDetail.model_validate(incident)
+
+
+@router.post("/investigate", response_model=IncidentDetail)
+def investigate(
+    payload: InvestigateRequest, db: Session = Depends(get_db)
+) -> IncidentDetail:
+    try:
+        outcome = investigate_user_issue(
+            db,
+            message=payload.message,
+            service=payload.service,
+            severity=payload.severity,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:  # pragma: no cover
+        raise HTTPException(
+            status_code=500, detail=f"Investigation failed: {exc}"
+        ) from exc
+
+    incident = outcome["incident"]
+    if not incident:
+        raise HTTPException(status_code=500, detail="Incident missing after investigation")
     return IncidentDetail.model_validate(incident)
 
 

@@ -10,11 +10,15 @@ from typing import Any
 from crewai import Agent, Crew, Process, Task
 from sqlalchemy.orm import Session
 
+from app.agents.confidence import normalize_confidence
+from app.agents.issue_focus import mentions_database, summarize_mysql_for_question
+from app.agents.pm2_targets import is_pm2_unhealthy
 from app.config import get_settings
 from app.models.enums import IncidentStatus
 from app.policies.safety import evaluate_action
 from app.services.incident_service import IncidentService
 from app.services.remediation import execute_approved_plan
+from app.tools.backend import get_tool_backend
 from app.tools.context import current_incident_id
 from app.tools.mock_state import mock_infra
 from app.tools.ops_tools import (
@@ -37,7 +41,12 @@ def _extract_json(text: str) -> dict[str, Any]:
         raise
 
 
-def run_crewai_incident(db: Session, incident_id: str) -> dict[str, Any]:
+def run_crewai_incident(
+    db: Session,
+    incident_id: str,
+    *,
+    user_message: str | None = None,
+) -> dict[str, Any]:
     """Run CrewAI for reasoning; Python enforces safety + recovery + verification."""
     settings = get_settings()
     if settings.openai_api_key:
@@ -49,19 +58,26 @@ def run_crewai_incident(db: Session, incident_id: str) -> dict[str, Any]:
     if not incident:
         raise ValueError(f"Incident not found: {incident_id}")
 
+    report = (user_message or incident.summary or "").strip()
     token = current_incident_id.set(incident_id)
     try:
         service.transition(incident, IncidentStatus.TRIAGING)
         service.transition(incident, IncidentStatus.INVESTIGATING)
 
+        allowlist = ",".join(sorted(settings.pm2_allowlist()))
         crew = _build_full_crew(settings.aegis_verbose)
-        state = mock_infra.get(incident_id)
+        if mock_infra.has(incident_id):
+            alarm_name = mock_infra.get(incident_id)["alarm"]["alarm_name"]
+        else:
+            alarm_name = settings.aegis_cw_alarm_name or "unknown"
         result = crew.kickoff(
             inputs={
                 "incident_id": incident_id,
                 "service": incident.service,
                 "scenario": incident.scenario,
-                "alarm_name": state["alarm"]["alarm_name"],
+                "alarm_name": alarm_name,
+                "user_message": report or "(none — alarm-driven)",
+                "pm2_allowlist": allowlist,
             }
         )
 
@@ -92,11 +108,11 @@ def run_crewai_incident(db: Session, incident_id: str) -> dict[str, Any]:
                 hypothesis=str(item.get("hypothesis", "unknown")),
                 evidence_for=str(item.get("evidence_for", "")),
                 evidence_against=str(item.get("evidence_against", "")),
-                score=float(item.get("score", 0.0)),
+                score=normalize_confidence(item.get("score", 0.0)),
                 selected=bool(item.get("selected", False)),
             )
         root_cause = str(rca_data.get("root_cause", "Unknown"))
-        confidence = float(rca_data.get("confidence", 0.5))
+        confidence = normalize_confidence(rca_data.get("confidence", 0.5))
         incident.root_cause = root_cause
         incident.confidence = confidence
         db.commit()
@@ -111,6 +127,138 @@ def run_crewai_incident(db: Session, incident_id: str) -> dict[str, Any]:
                 "rationale": plan_output[:500],
                 "approval_required": False,
             }
+
+        # Live evidence gate: answer the user's actual question; don't claim
+        # "site is up" when they asked about MySQL, and don't invent outages.
+        if not mock_infra.has(incident_id):
+            backend = get_tool_backend(incident_id)
+            live_health = backend.health_check()
+            live_pm2 = backend.get_pm2_status()
+            live_mysql = backend.get_mysql_status()
+            http_status = int(live_health.get("health", {}).get("http_status") or 0)
+            health_ok = bool(live_health.get("health", {}).get("ok"))
+            if "ok" not in (live_health.get("health") or {}):
+                health_ok = 200 <= http_status < 400
+            allowlist = settings.pm2_allowlist()
+            pm2_bad = any(
+                p.get("name") in allowlist and is_pm2_unhealthy(p)
+                for p in (live_pm2.get("processes") or [])
+            )
+            mysql_block = live_mysql.get("mysql") or {}
+            db_question = mentions_database(report)
+            mysql_summary = summarize_mysql_for_question(mysql_block, report)
+
+            service.add_observation(
+                incident_id,
+                source="mysql",
+                name="status",
+                value=str(mysql_summary.get("detail")),
+                evidence=mysql_block,
+            )
+
+            if db_question:
+                # Database questions are answered from MySQL probes, not website HTTP.
+                if mysql_summary["healthy"]:
+                    healthy_cause = mysql_summary["root_cause"]
+                    incident.root_cause = healthy_cause
+                    incident.confidence = max(confidence, 0.9)
+                    db.commit()
+                    service.add_hypothesis(
+                        incident_id,
+                        hypothesis=healthy_cause,
+                        evidence_for=mysql_summary["detail"],
+                        evidence_against="n/a",
+                        score=0.9,
+                        selected=True,
+                    )
+                    service.finalize(
+                        incident,
+                        status=IncidentStatus.RECOVERED,
+                        summary=(
+                            f"Checked live MySQL for: {report[:280]!r}. "
+                            f"{mysql_summary['detail']}. No remediation needed."
+                        ),
+                        root_cause=healthy_cause,
+                        confidence=0.9,
+                    )
+                    return {
+                        "status": IncidentStatus.RECOVERED.value,
+                        "message": "MySQL looks healthy",
+                        "root_cause": healthy_cause,
+                        "confidence": 0.9,
+                        "crew_raw": str(result),
+                    }
+                # Unhealthy DB → fall through so planner/safety can propose restart_mysql
+                plan_data = {
+                    "proposed_action": "restart_mysql",
+                    "parameters": {},
+                    "risk": "MEDIUM",
+                    "rationale": mysql_summary["root_cause"],
+                    "approval_required": True,
+                }
+                root_cause = mysql_summary["root_cause"]
+                confidence = 0.9
+                incident.root_cause = root_cause
+                incident.confidence = confidence
+                db.commit()
+                service.add_hypothesis(
+                    incident_id,
+                    hypothesis=root_cause,
+                    evidence_for=mysql_summary["detail"],
+                    evidence_against="Website may still respond while DB is degraded",
+                    score=0.9,
+                    selected=True,
+                )
+            elif health_ok and not pm2_bad and mysql_summary["healthy"]:
+                endpoint = live_health.get("health", {}).get("endpoint")
+                healthy_cause = (
+                    f"Website/service appears healthy "
+                    f"(HTTP {http_status} from {endpoint}; PM2 apps online; MySQL ok)"
+                )
+                incident.root_cause = healthy_cause
+                incident.confidence = confidence
+                db.commit()
+                service.finalize(
+                    incident,
+                    status=IncidentStatus.RECOVERED,
+                    summary=(
+                        f"Checked live evidence for: {report[:280]!r}. "
+                        f"HTTP {http_status} from {endpoint}; PM2 allowlisted apps are online; "
+                        f"MySQL: {mysql_summary['detail']}. "
+                        "Crew proposal ignored because live checks show the stack is healthy."
+                    ),
+                    root_cause=healthy_cause,
+                    confidence=confidence,
+                )
+                return {
+                    "status": IncidentStatus.RECOVERED.value,
+                    "message": "Site/service appears healthy",
+                    "root_cause": healthy_cause,
+                    "confidence": confidence,
+                    "crew_raw": str(result),
+                }
+            elif health_ok and not pm2_bad and not mysql_summary["healthy"]:
+                # Site up but DB bad — force MySQL plan even if crew suggested PM2.
+                plan_data = {
+                    "proposed_action": "restart_mysql",
+                    "parameters": {},
+                    "risk": "MEDIUM",
+                    "rationale": mysql_summary["root_cause"],
+                    "approval_required": True,
+                }
+                root_cause = mysql_summary["root_cause"]
+                confidence = 0.85
+                incident.root_cause = root_cause
+                incident.confidence = confidence
+                db.commit()
+                service.add_hypothesis(
+                    incident_id,
+                    hypothesis=root_cause,
+                    evidence_for=mysql_summary["detail"],
+                    evidence_against="HTTP/PM2 still look fine",
+                    score=0.85,
+                    selected=True,
+                )
 
         service.transition(incident, IncidentStatus.PLAN_READY)
         proposed_action = str(plan_data.get("proposed_action", "restart_pm2_process"))
@@ -136,8 +284,8 @@ def run_crewai_incident(db: Session, incident_id: str) -> dict[str, Any]:
         )
 
         # Persist a compact observation set for the timeline
-        before = mock_infra.get(incident_id)
-        for key, value in before["metrics"].items():
+        before = get_tool_backend(incident_id).snapshot()
+        for key, value in (before.get("metrics") or {}).items():
             service.add_observation(
                 incident_id,
                 source="system",
@@ -149,8 +297,8 @@ def run_crewai_incident(db: Session, incident_id: str) -> dict[str, Any]:
             incident_id,
             source="cloudwatch",
             name="alarm",
-            value=before["alarm"]["state"],
-            evidence=before["alarm"],
+            value=str(before.get("alarm", {}).get("state")),
+            evidence=before.get("alarm"),
         )
         service.add_observation(
             incident_id,
@@ -262,19 +410,20 @@ def _build_full_crew(verbose: bool) -> Crew:
     manage_task = Task(
         description=(
             "Incident {incident_id} for service {service} (scenario={scenario}). "
-            "As Incident Manager, state what appears to be happening from the alarm name "
-            "'{alarm_name}' and list the investigation questions for monitoring, logs, "
-            "infra, and database agents. Return a short JSON brief with keys: "
-            "situation, priorities."
+            "Operator/user report: '{user_message}'. "
+            "Also consider CloudWatch alarm '{alarm_name}'. "
+            "As Incident Manager, interpret the report (e.g. website down → check "
+            "health_check + PM2 websites/node-server). Return JSON with keys: "
+            "situation, priorities, suspected_pm2_processes."
         ),
         expected_output="JSON investigation brief",
         agent=incident_manager,
     )
     monitor_task = Task(
         description=(
-            "For incident {incident_id}, use tools to confirm alarm '{alarm_name}', "
-            "collect cpu/memory/swap/disk and cloudwatch metrics, and run health_check. "
-            "Decide which metrics matter based on the Incident Manager brief. Return JSON."
+            "For incident {incident_id}, confirm alarm '{alarm_name}', "
+            "collect cpu/memory/swap/disk metrics, and run health_check "
+            "(critical for website-down reports). Return JSON."
         ),
         expected_output="JSON with alarm, metrics, health",
         agent=monitoring,
@@ -283,8 +432,8 @@ def _build_full_crew(verbose: bool) -> Crew:
     logs_task = Task(
         description=(
             "Analyze logs for service {service}. Call query_logs and get_pm2_logs for "
-            "process_name=api. Highlight patterns that support or refute memory pressure "
-            "vs database failures. Return JSON evidence."
+            "process_name=websites and process_name=node-server (and api if present). "
+            "Highlight patterns for site outages vs memory pressure. Return JSON."
         ),
         expected_output="JSON log analysis",
         agent=log_analyst,
@@ -292,9 +441,9 @@ def _build_full_crew(verbose: bool) -> Crew:
     )
     infra_task = Task(
         description=(
-            "Investigate infrastructure for incident {incident_id}. Based on monitoring "
-            "findings, call get_ec2_status, get_nginx_status, get_process_memory / "
-            "get_processes, and get_pm2_status. Return JSON with key findings."
+            "Investigate infrastructure for incident {incident_id}. Call get_ec2_status, "
+            "get_nginx_status, get_process_memory / get_processes, and get_pm2_status. "
+            "Focus on PM2 apps in allowlist: {pm2_allowlist}. Return JSON."
         ),
         expected_output="JSON infra evidence",
         agent=infra,
@@ -303,8 +452,9 @@ def _build_full_crew(verbose: bool) -> Crew:
     db_task = Task(
         description=(
             "Investigate MySQL for incident {incident_id}. Call get_mysql_status (and "
-            "query_logs if needed). Explicitly conclude whether MySQL is healthy or the "
-            "likely root cause. Return JSON."
+            "query_logs if needed). Inspect production and staging database probes, "
+            "service status, connections, and threads_running. Explicitly conclude "
+            "whether MySQL is healthy or the likely root cause. Return JSON."
         ),
         expected_output="JSON MySQL assessment",
         agent=database,
@@ -312,9 +462,10 @@ def _build_full_crew(verbose: bool) -> Crew:
     )
     rca_task = Task(
         description=(
-            "Using all prior evidence, produce scored hypotheses and select root cause. "
-            "Return JSON with hypotheses[], root_cause, confidence. Prefer Node/PM2 api "
-            "memory issues when MySQL is healthy; prefer MySQL remediation when DB is degraded."
+            "Using all prior evidence and the user report '{user_message}', produce scored "
+            "hypotheses and select root cause. Return JSON with hypotheses[], root_cause, "
+            "confidence. For website/signyn reports prefer PM2 websites or node-server "
+            "when unhealthy or health_check failed; prefer MySQL only when DB is degraded."
         ),
         expected_output="JSON RCA result",
         agent=diagnosis,
@@ -324,9 +475,11 @@ def _build_full_crew(verbose: bool) -> Crew:
         description=(
             "Propose remediation JSON with proposed_action, parameters, risk "
             "(LOW|MEDIUM|HIGH|CRITICAL), rationale, approval_required. "
-            "Allowlisted actions only: restart_pm2_process (process_name api|worker), "
-            "clear_temp_files, rotate_logs, restart_mysql, scale_ec2, change_configuration. "
-            "Never propose destructive actions."
+            "Allowlisted actions: restart_pm2_process with process_name in "
+            "[{pm2_allowlist}], clear_temp_files, rotate_logs, restart_mysql, "
+            "scale_ec2, change_configuration. Prefer restart_pm2_process on "
+            "Never propose destructive actions. If health_check is 2xx and PM2 apps are "
+            "online, do NOT invent an outage — propose no remediation / note site is healthy."
         ),
         expected_output="JSON plan",
         agent=planner,

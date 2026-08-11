@@ -48,7 +48,9 @@ export function SiteHeader() {
             <span>
               API {health ? health.status : "…"} · DB{" "}
               {health?.database ?? "…"} · mode{" "}
-              {health?.agent_mode ?? "…"}
+              {health?.agent_mode ?? "…"} · tools{" "}
+              {health?.tool_backend ?? "…"}
+              {health?.aws_configured ? " · aws✓" : ""}
             </span>
           </div>
           <span className="max-w-[180px] truncate font-mono text-mist-400" title={getApiUrl()}>

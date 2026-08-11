@@ -10,11 +10,24 @@ class HealthResponse(BaseModel):
     status: str
     database: str
     agent_mode: str
+    tool_backend: str = "mock"
+    aws_configured: bool = False
 
 
 class SimulateRequest(BaseModel):
     scenario: str = "api_memory_pressure"
     service: str = "production-api"
+    severity: str = "HIGH"
+
+
+class LiveIncidentRequest(BaseModel):
+    service: str = "production-api"
+    severity: str = "HIGH"
+
+
+class InvestigateRequest(BaseModel):
+    message: str = Field(..., min_length=3, max_length=2000)
+    service: str = "signyn"
     severity: str = "HIGH"
 
 

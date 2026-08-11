@@ -18,6 +18,17 @@ def test_allowlisted_pm2_restart_auto_approved():
     assert decision.risk.value == "LOW"
 
 
+def test_allowlisted_websites_and_node_server():
+    for name in ("websites", "node-server", "signyn", "signyardsnext"):
+        decision = evaluate_action(
+            "restart_pm2_process",
+            {"process_name": name},
+            actions_already_taken=0,
+        )
+        assert decision.allowed is True
+        assert decision.risk.value == "LOW"
+
+
 def test_low_risk_clear_temp_auto():
     decision = evaluate_action("clear_temp_files", {})
     assert decision.allowed is True

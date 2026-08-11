@@ -15,7 +15,10 @@ export function shortId(id: string) {
 
 export function confidenceLabel(value: number | null | undefined) {
   if (value == null) return "—";
-  return `${Math.round(value * 100)}%`;
+  // Models sometimes return 0–100; normalize to a percentage display.
+  const normalized = value > 1 ? value / 100 : value;
+  const pct = Math.round(Math.min(Math.max(normalized, 0), 1) * 100);
+  return `${pct}%`;
 }
 
 export function statusTone(status: string) {

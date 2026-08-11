@@ -1,4 +1,4 @@
-"""Typed operations tools. Backed by local mocks today; same names later map to AWS."""
+"""Typed operations tools. Backed by mock or AWS via get_tool_backend()."""
 
 from __future__ import annotations
 
@@ -8,8 +8,8 @@ from typing import Any, Type
 from crewai.tools import BaseTool
 from pydantic import BaseModel, Field
 
+from app.tools.backend import get_tool_backend
 from app.tools.context import require_incident_id
-from app.tools.mock_state import mock_infra
 
 
 def _dumps(payload: Any) -> str:
@@ -64,17 +64,7 @@ class GetCloudWatchAlarmTool(BaseTool):
     args_schema: Type[BaseModel] = AlarmInput
 
     def _run(self, alarm_name: str) -> str:
-        state = mock_infra.get(require_incident_id())
-        alarm = state["alarm"]
-        return _dumps(
-            {
-                "requested_alarm": alarm_name,
-                "alarm_name": alarm["alarm_name"],
-                "state": alarm["state"],
-                "reason": alarm["reason"],
-                "metric": alarm["metric"],
-            }
-        )
+        return _dumps(get_tool_backend().get_cloudwatch_alarm(alarm_name))
 
 
 class GetCloudWatchMetricTool(BaseTool):
@@ -83,17 +73,10 @@ class GetCloudWatchMetricTool(BaseTool):
     args_schema: Type[BaseModel] = MetricInput
 
     def _run(self, metric: str, period: int = 300, statistic: str = "Average") -> str:
-        state = mock_infra.get(require_incident_id())
-        value = state["metrics"].get(metric)
         return _dumps(
-            {
-                "metric": metric,
-                "period": period,
-                "statistic": statistic,
-                "value": value,
-                "unit": "Percent" if "utilization" in metric else "Count",
-                "available_metrics": list(state["metrics"].keys()),
-            }
+            get_tool_backend().get_cloudwatch_metric(
+                metric, period=period, statistic=statistic
+            )
         )
 
 
@@ -103,10 +86,7 @@ class GetCpuUsageTool(BaseTool):
     args_schema: Type[BaseModel] = EmptyInput
 
     def _run(self, note: str = "") -> str:
-        state = mock_infra.get(require_incident_id())
-        return _dumps(
-            {"cpu_utilization": state["metrics"]["cpu_utilization"], "note": note}
-        )
+        return _dumps(get_tool_backend().get_cpu_usage(note=note))
 
 
 class GetMemoryUsageTool(BaseTool):
@@ -115,13 +95,7 @@ class GetMemoryUsageTool(BaseTool):
     args_schema: Type[BaseModel] = EmptyInput
 
     def _run(self, note: str = "") -> str:
-        state = mock_infra.get(require_incident_id())
-        return _dumps(
-            {
-                "memory_utilization": state["metrics"]["memory_utilization"],
-                "note": note,
-            }
-        )
+        return _dumps(get_tool_backend().get_memory_usage(note=note))
 
 
 class GetDiskUsageTool(BaseTool):
@@ -130,10 +104,7 @@ class GetDiskUsageTool(BaseTool):
     args_schema: Type[BaseModel] = EmptyInput
 
     def _run(self, note: str = "") -> str:
-        state = mock_infra.get(require_incident_id())
-        return _dumps(
-            {"disk_utilization": state["metrics"]["disk_utilization"], "note": note}
-        )
+        return _dumps(get_tool_backend().get_disk_usage(note=note))
 
 
 class GetSwapUsageTool(BaseTool):
@@ -142,10 +113,7 @@ class GetSwapUsageTool(BaseTool):
     args_schema: Type[BaseModel] = EmptyInput
 
     def _run(self, note: str = "") -> str:
-        state = mock_infra.get(require_incident_id())
-        return _dumps(
-            {"swap_utilization": state["metrics"]["swap_utilization"], "note": note}
-        )
+        return _dumps(get_tool_backend().get_swap_usage(note=note))
 
 
 class GetProcessesTool(BaseTool):
@@ -154,11 +122,7 @@ class GetProcessesTool(BaseTool):
     args_schema: Type[BaseModel] = EmptyInput
 
     def _run(self, note: str = "") -> str:
-        state = mock_infra.get(require_incident_id())
-        processes = sorted(
-            state["processes"], key=lambda p: p.get("memory_mb", 0), reverse=True
-        )
-        return _dumps({"processes": processes, "note": note})
+        return _dumps(get_tool_backend().get_processes(note=note))
 
 
 class GetProcessMemoryTool(BaseTool):
@@ -176,36 +140,20 @@ class QueryLogsTool(BaseTool):
     args_schema: Type[BaseModel] = LogsInput
 
     def _run(self, service: str, time_range_minutes: int = 30, filter: str = "") -> str:
-        state = mock_infra.get(require_incident_id())
-        lines = state["logs"]
-        if filter:
-            lines = [line for line in lines if filter.lower() in line.lower()]
         return _dumps(
-            {
-                "service": service,
-                "time_range_minutes": time_range_minutes,
-                "filter": filter,
-                "lines": lines,
-            }
+            get_tool_backend().query_logs(
+                service, time_range_minutes=time_range_minutes, filter=filter
+            )
         )
 
 
 class GetSystemMetricsTool(BaseTool):
     name: str = "get_system_metrics"
-    description: str = "Get host CPU/memory/swap/disk and key app metrics via mock SSM."
+    description: str = "Get host CPU/memory/swap/disk and key app metrics (mock or SSM)."
     args_schema: Type[BaseModel] = EmptyInput
 
     def _run(self, note: str = "") -> str:
-        state = mock_infra.get(require_incident_id())
-        return _dumps(
-            {
-                "instance_id": state["instance_id"],
-                "metrics": state["metrics"],
-                "temp_files_mb": state.get("temp_files_mb"),
-                "remediated": state["remediated"],
-                "note": note,
-            }
-        )
+        return _dumps(get_tool_backend().get_system_metrics(note=note))
 
 
 class GetPm2StatusTool(BaseTool):
@@ -214,14 +162,7 @@ class GetPm2StatusTool(BaseTool):
     args_schema: Type[BaseModel] = EmptyInput
 
     def _run(self, note: str = "") -> str:
-        state = mock_infra.get(require_incident_id())
-        return _dumps(
-            {
-                "instance_id": state["instance_id"],
-                "processes": state["pm2"]["processes"],
-                "note": note,
-            }
-        )
+        return _dumps(get_tool_backend().get_pm2_status(note=note))
 
 
 class GetPm2LogsTool(BaseTool):
@@ -230,9 +171,7 @@ class GetPm2LogsTool(BaseTool):
     args_schema: Type[BaseModel] = ProcessInput
 
     def _run(self, process_name: str) -> str:
-        state = mock_infra.get(require_incident_id())
-        lines = state.get("pm2_logs", {}).get(process_name, [])
-        return _dumps({"process_name": process_name, "lines": lines})
+        return _dumps(get_tool_backend().get_pm2_logs(process_name))
 
 
 class GetMysqlStatusTool(BaseTool):
@@ -241,8 +180,7 @@ class GetMysqlStatusTool(BaseTool):
     args_schema: Type[BaseModel] = EmptyInput
 
     def _run(self, note: str = "") -> str:
-        state = mock_infra.get(require_incident_id())
-        return _dumps({"mysql": state["mysql"], "note": note})
+        return _dumps(get_tool_backend().get_mysql_status(note=note))
 
 
 class GetNginxStatusTool(BaseTool):
@@ -251,8 +189,7 @@ class GetNginxStatusTool(BaseTool):
     args_schema: Type[BaseModel] = EmptyInput
 
     def _run(self, note: str = "") -> str:
-        state = mock_infra.get(require_incident_id())
-        return _dumps({"nginx": state["nginx"], "note": note})
+        return _dumps(get_tool_backend().get_nginx_status(note=note))
 
 
 class GetEc2StatusTool(BaseTool):
@@ -261,8 +198,7 @@ class GetEc2StatusTool(BaseTool):
     args_schema: Type[BaseModel] = EmptyInput
 
     def _run(self, note: str = "") -> str:
-        state = mock_infra.get(require_incident_id())
-        return _dumps({"ec2": state["ec2"], "region": state.get("region"), "note": note})
+        return _dumps(get_tool_backend().get_ec2_status(note=note))
 
 
 class HealthCheckTool(BaseTool):
@@ -271,8 +207,7 @@ class HealthCheckTool(BaseTool):
     args_schema: Type[BaseModel] = EmptyInput
 
     def _run(self, note: str = "") -> str:
-        state = mock_infra.get(require_incident_id())
-        return _dumps({"health": state["health"], "note": note})
+        return _dumps(get_tool_backend().health_check(note=note))
 
 
 class RestartPm2ProcessTool(BaseTool):
@@ -284,8 +219,7 @@ class RestartPm2ProcessTool(BaseTool):
     args_schema: Type[BaseModel] = ProcessInput
 
     def _run(self, process_name: str) -> str:
-        result = mock_infra.restart_pm2_process(require_incident_id(), process_name)
-        return _dumps(result)
+        return _dumps(get_tool_backend().restart_pm2_process(process_name))
 
 
 class ClearTempFilesTool(BaseTool):
@@ -294,7 +228,7 @@ class ClearTempFilesTool(BaseTool):
     args_schema: Type[BaseModel] = EmptyInput
 
     def _run(self, note: str = "") -> str:
-        result = mock_infra.clear_temp_files(require_incident_id())
+        result = get_tool_backend().clear_temp_files()
         result["note"] = note
         return _dumps(result)
 
@@ -305,7 +239,7 @@ class RotateLogsTool(BaseTool):
     args_schema: Type[BaseModel] = EmptyInput
 
     def _run(self, note: str = "") -> str:
-        result = mock_infra.rotate_logs(require_incident_id())
+        result = get_tool_backend().rotate_logs()
         result["note"] = note
         return _dumps(result)
 
@@ -316,7 +250,7 @@ class RestartMysqlTool(BaseTool):
     args_schema: Type[BaseModel] = EmptyInput
 
     def _run(self, note: str = "") -> str:
-        result = mock_infra.restart_mysql(require_incident_id())
+        result = get_tool_backend().restart_mysql()
         result["note"] = note
         return _dumps(result)
 
@@ -327,8 +261,7 @@ class ScaleEc2Tool(BaseTool):
     args_schema: Type[BaseModel] = ScaleInput
 
     def _run(self, desired_capacity: int) -> str:
-        result = mock_infra.scale_ec2(require_incident_id(), desired_capacity)
-        return _dumps(result)
+        return _dumps(get_tool_backend().scale_ec2(desired_capacity))
 
 
 class ChangeConfigurationTool(BaseTool):
@@ -337,8 +270,7 @@ class ChangeConfigurationTool(BaseTool):
     args_schema: Type[BaseModel] = ConfigInput
 
     def _run(self, key: str, value: str) -> str:
-        result = mock_infra.change_configuration(require_incident_id(), key, value)
-        return _dumps(result)
+        return _dumps(get_tool_backend().change_configuration(key, value))
 
 
 class CreateIncidentReportTool(BaseTool):

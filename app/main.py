@@ -16,10 +16,10 @@ async def lifespan(_: FastAPI):
 app = FastAPI(
     title="Aegis — Autonomous AI Operations Agent",
     description=(
-        "Agentic incident response MVP using CrewAI (or deterministic fallback), "
-        "local mock AWS tools, and PostgreSQL audit/timeline storage."
+        "Agentic incident response using CrewAI (or deterministic fallback), "
+        "mock or live AWS tools (CloudWatch/EC2/SSM), and PostgreSQL audit storage."
     ),
-    version="0.1.0",
+    version="0.2.0",
     lifespan=lifespan,
 )
 
@@ -45,4 +45,6 @@ def root() -> dict[str, str]:
         "docs": "/docs",
         "health": "/health",
         "simulate": "POST /incidents/simulate",
+        "live": "POST /incidents/live",
+        "investigate": "POST /incidents/investigate",
     }

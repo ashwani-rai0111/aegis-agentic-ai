@@ -59,6 +59,31 @@ export function simulateIncident(payload?: {
   });
 }
 
+export function runLiveIncident(payload?: { service?: string; severity?: string }) {
+  return request<IncidentDetail>("/incidents/live", {
+    method: "POST",
+    body: JSON.stringify({
+      service: payload?.service ?? "production-api",
+      severity: payload?.severity ?? "HIGH",
+    }),
+  });
+}
+
+export function investigateIssue(payload: {
+  message: string;
+  service?: string;
+  severity?: string;
+}) {
+  return request<IncidentDetail>("/incidents/investigate", {
+    method: "POST",
+    body: JSON.stringify({
+      message: payload.message,
+      service: payload.service ?? "signyn",
+      severity: payload.severity ?? "HIGH",
+    }),
+  });
+}
+
 export function approveIncident(id: string, approvedBy = "dashboard-operator") {
   return request<IncidentDetail>(`/incidents/${id}/approve`, {
     method: "POST",

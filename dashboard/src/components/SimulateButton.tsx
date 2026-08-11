@@ -2,18 +2,18 @@
 
 import { useRouter } from "next/navigation";
 import { useState } from "react";
-import { simulateIncident } from "@/lib/api";
+import { runLiveIncident, simulateIncident } from "@/lib/api";
 
 const SCENARIOS = [
   {
     id: "api_memory_pressure",
     label: "Simulate API memory pressure",
-    hint: "Auto low-risk PM2 restart",
+    hint: "Mock · auto low-risk PM2 restart",
   },
   {
     id: "mysql_restart_required",
     label: "Simulate MySQL failure",
-    hint: "Needs human approval",
+    hint: "Mock · needs human approval",
   },
 ] as const;
 
@@ -22,7 +22,7 @@ export function SimulateButton({ onDone }: { onDone?: () => void }) {
   const [loading, setLoading] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  async function run(scenario: string) {
+  async function runMock(scenario: string) {
     setLoading(scenario);
     setError(null);
     try {
@@ -36,6 +36,20 @@ export function SimulateButton({ onDone }: { onDone?: () => void }) {
     }
   }
 
+  async function runLive() {
+    setLoading("live_aws");
+    setError(null);
+    try {
+      const incident = await runLiveIncident();
+      onDone?.();
+      router.push(`/incidents/${incident.id}`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Live AWS run failed");
+    } finally {
+      setLoading(null);
+    }
+  }
+
   return (
     <div className="flex flex-col items-start gap-3">
       <div className="flex flex-wrap gap-2">
@@ -43,7 +57,7 @@ export function SimulateButton({ onDone }: { onDone?: () => void }) {
           <button
             key={scenario.id}
             type="button"
-            onClick={() => run(scenario.id)}
+            onClick={() => runMock(scenario.id)}
             disabled={loading !== null}
             className="rounded-lg bg-signal-amber px-4 py-2.5 font-mono text-sm font-semibold tracking-wide text-ink-950 transition hover:brightness-110 disabled:cursor-wait disabled:opacity-70"
             title={scenario.hint}
@@ -51,12 +65,21 @@ export function SimulateButton({ onDone }: { onDone?: () => void }) {
             {loading === scenario.id ? "Running agent loop…" : scenario.label}
           </button>
         ))}
+        <button
+          type="button"
+          onClick={runLive}
+          disabled={loading !== null}
+          className="rounded-lg border border-signal-sky/60 bg-ink-950/40 px-4 py-2.5 font-mono text-sm font-semibold tracking-wide text-signal-sky transition hover:bg-ink-950/70 disabled:cursor-wait disabled:opacity-70"
+          title="Requires AEGIS_TOOL_BACKEND=aws and credentials in .env"
+        >
+          {loading === "live_aws" ? "Running on AWS…" : "Run against live AWS"}
+        </button>
       </div>
       <p className="font-mono text-[11px] text-mist-400">
-        Memory pressure auto-remediates · MySQL path pauses for approval
+        Mock demos stay local · Live uses CloudWatch + EC2 + SSM from your .env
       </p>
       {error ? (
-        <p className="max-w-md font-mono text-xs text-signal-rose">{error}</p>
+        <p className="max-w-xl font-mono text-xs text-signal-rose">{error}</p>
       ) : null}
     </div>
   );
