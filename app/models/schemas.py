@@ -132,3 +132,39 @@ class ApproveRequest(BaseModel):
 class RejectRequest(BaseModel):
     rejected_by: str = "human-operator"
     reason: str = "Operator rejected remediation plan"
+
+
+class FixRepoOut(BaseModel):
+    key: str
+    url: str
+    profile: str
+    starting_branch: str
+    deploy_label: str
+
+
+class FixJobCreate(BaseModel):
+    repo_key: str = Field(..., min_length=1, max_length=120)
+    error_text: str = Field(..., min_length=5, max_length=20000)
+    notes: str | None = Field(default=None, max_length=4000)
+
+
+class FixJobOut(BaseModel):
+    id: str
+    repo_key: str
+    repo_url: str
+    profile: str
+    status: str
+    error_text: str
+    notes: str | None = None
+    backup_branch: str | None = None
+    fix_branch: str | None = None
+    pr_url: str | None = None
+    cursor_agent_id: str | None = None
+    cursor_run_id: str | None = None
+    summary: str | None = None
+    error: str | None = None
+    created_at: datetime
+    updated_at: datetime
+    completed_at: datetime | None = None
+
+    model_config = {"from_attributes": True}

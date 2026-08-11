@@ -55,6 +55,16 @@ class Settings(BaseSettings):
     # After human approval, allow systemctl restart of MySQL on the instance
     aegis_mysql_restart_enabled: bool = True
 
+    # Code Fixes (Cursor Cloud Agents) — separate from live AWS ops
+    cursor_api_key: str | None = None
+    # key|url|profile|starting_branch  (comma-separated repos)
+    # profile = backend_deploy | frontend_github_only
+    aegis_fix_repos: str = ""
+    aegis_fix_base_branch: str = "main"
+    aegis_fix_backup_prefix: str = "backup-"
+    aegis_fix_model: str = "composer-2.5"
+    aegis_fix_max_concurrent: int = 1
+
     def pm2_allowlist(self) -> set[str]:
         return {
             part.strip()

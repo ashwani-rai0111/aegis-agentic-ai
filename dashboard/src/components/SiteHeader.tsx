@@ -31,14 +31,30 @@ export function SiteHeader() {
   return (
     <header className="border-b border-mist-300/10 bg-ink-950/70 backdrop-blur-md">
       <div className="mx-auto flex max-w-7xl items-center justify-between gap-4 px-6 py-4">
-        <Link href="/" className="group flex items-baseline gap-3">
-          <span className="font-display text-3xl font-semibold tracking-tight text-mist-50 transition group-hover:text-signal-amber">
-            Aegis
-          </span>
-          <span className="hidden font-mono text-xs uppercase tracking-[0.2em] text-mist-400 sm:inline">
-            Operations Agent
-          </span>
-        </Link>
+        <div className="flex items-center gap-6">
+          <Link href="/" className="group flex items-baseline gap-3">
+            <span className="font-display text-3xl font-semibold tracking-tight text-mist-50 transition group-hover:text-signal-amber">
+              Aegis
+            </span>
+            <span className="hidden font-mono text-xs uppercase tracking-[0.2em] text-mist-400 sm:inline">
+              Agent Console
+            </span>
+          </Link>
+          <nav className="flex items-center gap-3 font-mono text-xs uppercase tracking-[0.14em]">
+            <Link
+              href="/"
+              className="text-mist-400 transition hover:text-mist-50"
+            >
+              Ops
+            </Link>
+            <Link
+              href="/fixes"
+              className="text-mist-400 transition hover:text-signal-sky"
+            >
+              Code Fixes
+            </Link>
+          </nav>
+        </div>
 
         <div className="flex items-center gap-4 text-xs">
           <div className="hidden items-center gap-2 font-mono text-mist-300 md:flex">

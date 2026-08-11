@@ -141,3 +141,32 @@ class AuditLog(Base):
     result: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     incident: Mapped[Incident | None] = relationship(back_populates="audit_logs")
+
+
+class FixJob(Base):
+    """Cursor Cloud code-fix jobs (separate from live AWS ops incidents)."""
+
+    __tablename__ = "fix_jobs"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    repo_key: Mapped[str] = mapped_column(String(120), nullable=False, index=True)
+    repo_url: Mapped[str] = mapped_column(String(500), nullable=False)
+    profile: Mapped[str] = mapped_column(String(64), nullable=False)
+    status: Mapped[str] = mapped_column(String(48), nullable=False, index=True)
+    error_text: Mapped[str] = mapped_column(Text, nullable=False)
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    prompt: Mapped[str | None] = mapped_column(Text, nullable=True)
+    backup_branch: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    fix_branch: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    pr_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    cursor_agent_id: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    cursor_run_id: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow
+    )
+    completed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )

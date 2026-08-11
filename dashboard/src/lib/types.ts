@@ -85,3 +85,31 @@ export type HealthResponse = {
   tool_backend: string;
   aws_configured: boolean;
 };
+
+export type FixRepo = {
+  key: string;
+  url: string;
+  profile: string;
+  starting_branch: string;
+  deploy_label: string;
+};
+
+export type FixJob = {
+  id: string;
+  repo_key: string;
+  repo_url: string;
+  profile: string;
+  status: string;
+  error_text: string;
+  notes: string | null;
+  backup_branch: string | null;
+  fix_branch: string | null;
+  pr_url: string | null;
+  cursor_agent_id: string | null;
+  cursor_run_id: string | null;
+  summary: string | null;
+  error: string | null;
+  created_at: string;
+  updated_at: string;
+  completed_at: string | null;
+};

@@ -1,4 +1,10 @@
-import type { HealthResponse, IncidentDetail, IncidentSummary } from "./types";
+import type {
+  FixJob,
+  FixRepo,
+  HealthResponse,
+  IncidentDetail,
+  IncidentSummary,
+} from "./types";
 
 const API_URL =
   process.env.NEXT_PUBLIC_AEGIS_API_URL?.replace(/\/$/, "") ||
@@ -99,5 +105,28 @@ export function rejectIncident(
   return request<IncidentDetail>(`/incidents/${id}/reject`, {
     method: "POST",
     body: JSON.stringify({ rejected_by: rejectedBy, reason }),
+  });
+}
+
+export function fetchFixRepos() {
+  return request<FixRepo[]>("/fixes/repos");
+}
+
+export function fetchFixJobs() {
+  return request<FixJob[]>("/fixes");
+}
+
+export function fetchFixJob(id: string) {
+  return request<FixJob>(`/fixes/${id}`);
+}
+
+export function createFixJob(payload: {
+  repo_key: string;
+  error_text: string;
+  notes?: string;
+}) {
+  return request<FixJob>("/fixes", {
+    method: "POST",
+    body: JSON.stringify(payload),
   });
 }

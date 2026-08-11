@@ -3,7 +3,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api import health, incidents
+from app.api import fixes, health, incidents
 from app.database.session import init_db
 
 
@@ -17,9 +17,10 @@ app = FastAPI(
     title="Aegis — Autonomous AI Operations Agent",
     description=(
         "Agentic incident response using CrewAI (or deterministic fallback), "
-        "mock or live AWS tools (CloudWatch/EC2/SSM), and PostgreSQL audit storage."
+        "mock or live AWS tools (CloudWatch/EC2/SSM), PostgreSQL audit storage, "
+        "and Cursor Cloud code-fix jobs (separate Code Fixes surface)."
     ),
-    version="0.2.0",
+    version="0.3.0",
     lifespan=lifespan,
 )
 
@@ -36,6 +37,7 @@ app.add_middleware(
 
 app.include_router(health.router)
 app.include_router(incidents.router)
+app.include_router(fixes.router)
 
 
 @app.get("/")
@@ -47,4 +49,6 @@ def root() -> dict[str, str]:
         "simulate": "POST /incidents/simulate",
         "live": "POST /incidents/live",
         "investigate": "POST /incidents/investigate",
+        "fixes": "POST /fixes",
+        "fix_repos": "GET /fixes/repos",
     }
