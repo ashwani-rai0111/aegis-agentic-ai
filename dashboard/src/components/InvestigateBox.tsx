@@ -12,8 +12,14 @@ const EXAMPLES = [
 
 export function InvestigateBox({
   onDone,
+  onRunStart,
+  onRunSaved,
+  onRunFailed,
 }: {
   onDone?: () => void | Promise<void>;
+  onRunStart?: () => void;
+  onRunSaved?: (id: string) => void | Promise<void>;
+  onRunFailed?: () => void;
 }) {
   const router = useRouter();
   const [message, setMessage] = useState("");
@@ -29,11 +35,14 @@ export function InvestigateBox({
     if (loading) return;
     setLoading(true);
     setError(null);
+    onRunStart?.();
     try {
       const incident = await investigateIssue({ message: text });
+      await onRunSaved?.(incident.id);
       await onDone?.();
       router.push(`/incidents/${incident.id}`);
     } catch (err) {
+      onRunFailed?.();
       setError(err instanceof Error ? err.message : "Investigation failed");
     } finally {
       setLoading(false);

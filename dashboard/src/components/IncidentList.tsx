@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { fetchIncidents } from "@/lib/api";
 import { confidenceLabel, formatTime, shortId } from "@/lib/format";
 import type { IncidentSummary } from "@/lib/types";
@@ -13,11 +13,15 @@ export function IncidentList() {
   const [incidents, setIncidents] = useState<IncidentSummary[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [pending, setPending] = useState(false);
+  const knownIdsRef = useRef<Set<string>>(new Set());
+  const incidentsRef = useRef<IncidentSummary[]>([]);
 
   const load = useCallback(async () => {
     try {
       const data = await fetchIncidents();
       setIncidents(data);
+      incidentsRef.current = data;
       setError(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load incidents");
@@ -28,17 +32,45 @@ export function IncidentList() {
 
   useEffect(() => {
     load();
-    const id = setInterval(load, 8000);
-    return () => clearInterval(id);
   }, [load]);
+
+  useEffect(() => {
+    const ms = pending ? 2000 : 8000;
+    const id = setInterval(load, ms);
+    return () => clearInterval(id);
+  }, [load, pending]);
+
+  const newSavedRow = incidents.find((incident) => !knownIdsRef.current.has(incident.id));
+  const showPending = pending && !newSavedRow;
+
+  useEffect(() => {
+    if (pending && newSavedRow) setPending(false);
+  }, [pending, newSavedRow]);
 
   const stats = useMemo(() => {
     const recovered = incidents.filter((i) => i.status === "RECOVERED").length;
     const open = incidents.filter(
       (i) => !["RECOVERED", "FAILED", "ESCALATED"].includes(i.status),
     ).length;
-    return { total: incidents.length, recovered, open };
-  }, [incidents]);
+    return {
+      total: incidents.length + (showPending ? 1 : 0),
+      recovered,
+      open: open + (showPending ? 1 : 0),
+    };
+  }, [incidents, showPending]);
+
+  const runHandlers = {
+    onRunStart: () => {
+      knownIdsRef.current = new Set(incidentsRef.current.map((incident) => incident.id));
+      setPending(true);
+    },
+    onRunSaved: async () => {
+      await load();
+    },
+    onRunFailed: () => {
+      setPending(false);
+    },
+  };
 
   return (
     <div className="space-y-8 animate-fade-up">
@@ -53,11 +85,11 @@ export function IncidentList() {
             AWS. Aegis investigates, decides, acts, and verifies.
           </p>
         </div>
-        <SimulateButton onDone={load} />
+        <SimulateButton onDone={load} {...runHandlers} />
       </section>
 
       <section className="animate-fade-up">
-        <InvestigateBox onDone={load} />
+        <InvestigateBox onDone={load} {...runHandlers} />
       </section>
 
       <section className="grid gap-3 sm:grid-cols-3">
@@ -93,7 +125,7 @@ export function IncidentList() {
           <p className="px-4 py-8 font-mono text-sm text-mist-400">Loading…</p>
         ) : error ? (
           <p className="px-4 py-8 font-mono text-sm text-signal-rose">{error}</p>
-        ) : incidents.length === 0 ? (
+        ) : incidents.length === 0 && !showPending ? (
           <p className="px-4 py-8 text-sm text-mist-300">
             No incidents yet. Run a simulation to create the first timeline.
           </p>
@@ -112,6 +144,21 @@ export function IncidentList() {
                 </tr>
               </thead>
               <tbody>
+                {showPending ? (
+                  <tr className="border-b border-mist-300/5 bg-signal-sky/5">
+                    <td className="px-4 py-3 font-mono text-mist-400">pending</td>
+                    <td className="px-4 py-3 text-mist-300">signyn</td>
+                    <td className="px-4 py-3">
+                      <SeverityBadge severity="HIGH" />
+                    </td>
+                    <td className="px-4 py-3">
+                      <StatusBadge status="INVESTIGATING" />
+                    </td>
+                    <td className="px-4 py-3 text-mist-400">Working…</td>
+                    <td className="px-4 py-3 font-mono text-mist-400">—</td>
+                    <td className="px-4 py-3 font-mono text-mist-400">now</td>
+                  </tr>
+                ) : null}
                 {incidents.map((incident) => (
                   <tr
                     key={incident.id}

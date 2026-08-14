@@ -19,8 +19,14 @@ const SCENARIOS = [
 
 export function SimulateButton({
   onDone,
+  onRunStart,
+  onRunSaved,
+  onRunFailed,
 }: {
   onDone?: () => void | Promise<void>;
+  onRunStart?: () => void;
+  onRunSaved?: (id: string) => void | Promise<void>;
+  onRunFailed?: () => void;
 }) {
   const router = useRouter();
   const [loading, setLoading] = useState<string | null>(null);
@@ -30,11 +36,14 @@ export function SimulateButton({
     if (loading !== null) return;
     setLoading(scenario);
     setError(null);
+    onRunStart?.();
     try {
       const incident = await simulateIncident({ scenario });
+      await onRunSaved?.(incident.id);
       await onDone?.();
       router.push(`/incidents/${incident.id}`);
     } catch (err) {
+      onRunFailed?.();
       setError(err instanceof Error ? err.message : "Simulation failed");
     } finally {
       setLoading(null);
@@ -45,11 +54,14 @@ export function SimulateButton({
     if (loading !== null) return;
     setLoading("live_aws");
     setError(null);
+    onRunStart?.();
     try {
       const incident = await runLiveIncident();
+      await onRunSaved?.(incident.id);
       await onDone?.();
       router.push(`/incidents/${incident.id}`);
     } catch (err) {
+      onRunFailed?.();
       setError(err instanceof Error ? err.message : "Live AWS run failed");
     } finally {
       setLoading(null);
