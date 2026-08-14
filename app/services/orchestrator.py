@@ -12,6 +12,7 @@ from app.agents.deterministic import (
 from app.config import get_settings
 from app.models.enums import IncidentStatus
 from app.services.incident_service import IncidentService
+from app.services.issue_scope import out_of_scope_reason
 from app.services.remediation import execute_approved_plan, reject_plan
 from app.tools.aws_clients import get_boto_session
 from app.tools.backend import aws_settings_ready, resolve_tool_backend_name
@@ -150,8 +151,9 @@ def investigate_user_issue(
 ) -> dict[str, Any]:
     """Dashboard free-text issue → live AWS investigation."""
     text = (message or "").strip()
-    if len(text) < 3:
-        raise ValueError("Please describe the issue (at least a few words).")
+    rejected = out_of_scope_reason(text)
+    if rejected:
+        raise ValueError(rejected)
     return run_live_incident(
         db,
         service=service,

@@ -59,11 +59,15 @@ Also: action allowlists, parameter allowlists, max actions per incident, no arbi
 
 ## Quick start
 
-### 1) Start Postgres
+### 1) Start MySQL (XAMPP)
+Open **XAMPP Manager** and start **MySQL**, then create the app database once:
+
 ```bash
-cd aegis
-docker compose up -d
+/Applications/XAMPP/xamppfiles/bin/mysql -u root -e "CREATE DATABASE IF NOT EXISTS aegis CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;"
 ```
+
+`DATABASE_URL` defaults to `mysql+pymysql://root:@127.0.0.1:3306/aegis` (empty password).  
+Optional Postgres: `docker compose up -d` and set `DATABASE_URL=postgresql+psycopg://aegis:aegis@localhost:5432/aegis`.
 
 ### 2) Create virtualenv and install
 ```bash

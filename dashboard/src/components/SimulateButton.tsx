@@ -17,17 +17,22 @@ const SCENARIOS = [
   },
 ] as const;
 
-export function SimulateButton({ onDone }: { onDone?: () => void }) {
+export function SimulateButton({
+  onDone,
+}: {
+  onDone?: () => void | Promise<void>;
+}) {
   const router = useRouter();
   const [loading, setLoading] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   async function runMock(scenario: string) {
+    if (loading !== null) return;
     setLoading(scenario);
     setError(null);
     try {
       const incident = await simulateIncident({ scenario });
-      onDone?.();
+      await onDone?.();
       router.push(`/incidents/${incident.id}`);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Simulation failed");
@@ -37,11 +42,12 @@ export function SimulateButton({ onDone }: { onDone?: () => void }) {
   }
 
   async function runLive() {
+    if (loading !== null) return;
     setLoading("live_aws");
     setError(null);
     try {
       const incident = await runLiveIncident();
-      onDone?.();
+      await onDone?.();
       router.push(`/incidents/${incident.id}`);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Live AWS run failed");
@@ -53,6 +59,7 @@ export function SimulateButton({ onDone }: { onDone?: () => void }) {
   return (
     <div className="flex flex-col items-start gap-3">
       <div className="flex flex-wrap gap-2">
+        {/* Simulate buttons temporarily disabled — using live AWS only
         {SCENARIOS.map((scenario) => (
           <button
             key={scenario.id}
@@ -65,6 +72,7 @@ export function SimulateButton({ onDone }: { onDone?: () => void }) {
             {loading === scenario.id ? "Running agent loop…" : scenario.label}
           </button>
         ))}
+        */}
         <button
           type="button"
           onClick={runLive}
@@ -76,7 +84,7 @@ export function SimulateButton({ onDone }: { onDone?: () => void }) {
         </button>
       </div>
       <p className="font-mono text-[11px] text-mist-400">
-        Mock demos stay local · Live uses CloudWatch + EC2 + SSM from your .env
+        Live AWS · CloudWatch + EC2 + SSM
       </p>
       {error ? (
         <p className="max-w-xl font-mono text-xs text-signal-rose">{error}</p>

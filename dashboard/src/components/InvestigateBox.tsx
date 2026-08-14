@@ -10,7 +10,11 @@ const EXAMPLES = [
   "website is slow / not loading",
 ];
 
-export function InvestigateBox({ onDone }: { onDone?: () => void }) {
+export function InvestigateBox({
+  onDone,
+}: {
+  onDone?: () => void | Promise<void>;
+}) {
   const router = useRouter();
   const [message, setMessage] = useState("");
   const [loading, setLoading] = useState(false);
@@ -22,11 +26,12 @@ export function InvestigateBox({ onDone }: { onDone?: () => void }) {
       setError("Describe the issue in a few words.");
       return;
     }
+    if (loading) return;
     setLoading(true);
     setError(null);
     try {
       const incident = await investigateIssue({ message: text });
-      onDone?.();
+      await onDone?.();
       router.push(`/incidents/${incident.id}`);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Investigation failed");

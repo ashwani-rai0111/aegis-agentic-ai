@@ -5,16 +5,23 @@ import type {
   IncidentDetail,
   IncidentSummary,
 } from "./types";
+import { getSessionToken } from "./auth";
 
 const API_URL =
   process.env.NEXT_PUBLIC_AEGIS_API_URL?.replace(/\/$/, "") ||
   "http://localhost:8000";
+
+function authHeaders(): Record<string, string> {
+  const token = getSessionToken();
+  return token ? { Authorization: `Bearer ${token}` } : {};
+}
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${API_URL}${path}`, {
     ...init,
     headers: {
       "Content-Type": "application/json",
+      ...authHeaders(),
       ...(init?.headers || {}),
     },
     cache: "no-store",
@@ -28,7 +35,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     } catch {
       // keep statusText
     }
-    throw new Error(detail);
+    throw new Error(typeof detail === "string" ? detail : JSON.stringify(detail));
   }
 
   return response.json() as Promise<T>;
@@ -36,6 +43,19 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
 export function getApiUrl() {
   return API_URL;
+}
+
+export function login(username: string, password: string) {
+  return request<{ token: string; username: string }>("/auth/login", {
+    method: "POST",
+    body: JSON.stringify({ username, password }),
+  });
+}
+
+export function verifySession(token: string) {
+  return request<{ ok: boolean; username: string | null }>("/auth/session", {
+    headers: { Authorization: `Bearer ${token}` },
+  });
 }
 
 export function fetchHealth() {
@@ -124,6 +144,7 @@ export function createFixJob(payload: {
   repo_key: string;
   error_text: string;
   notes?: string;
+  fix_password: string;
 }) {
   return request<FixJob>("/fixes", {
     method: "POST",

@@ -146,6 +146,7 @@ class FixJobCreate(BaseModel):
     repo_key: str = Field(..., min_length=1, max_length=120)
     error_text: str = Field(..., min_length=5, max_length=20000)
     notes: str | None = Field(default=None, max_length=4000)
+    fix_password: str = Field(..., min_length=1, max_length=200)
 
 
 class FixJobOut(BaseModel):

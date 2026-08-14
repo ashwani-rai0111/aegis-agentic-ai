@@ -13,7 +13,12 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from app.agents.confidence import normalize_confidence
-from app.agents.issue_focus import mentions_database, summarize_mysql_for_question
+from app.agents.issue_focus import (
+    build_focused_live_answer,
+    classify_issue_focus,
+    mentions_database,
+    summarize_mysql_for_question,
+)
 from app.agents.pm2_targets import is_pm2_unhealthy, pick_pm2_restart_target
 from app.config import get_settings
 from app.models.enums import IncidentStatus
@@ -153,6 +158,32 @@ def run_deterministic_incident(
         mysql_severe = bool(mysql_block.get("severe"))
         mentions_db = mentions_database(report)
         mysql_summary = summarize_mysql_for_question(mysql_block, report)
+        focus = classify_issue_focus(report)
+        focused = build_focused_live_answer(
+            report=report,
+            health_block=health,
+            processes=pm2_procs,
+            mysql_summary=mysql_summary,
+            allowlist=allowlist,
+            fallback_endpoint=settings.aegis_healthcheck_url,
+        )
+        for source, name, value, evidence in focused.get("observations") or []:
+            # Avoid duplicating observations already recorded above for generic probes
+            if name in {
+                "status",
+                "health_check",
+                "process_status",
+                "node_server_status",
+                "website_status",
+            } and source in {"mysql", "http", "pm2"}:
+                service.add_observation(
+                    incident_id,
+                    source=source,
+                    name=f"focus_{name}" if name in {"status", "health_check"} else name,
+                    value=value if isinstance(value, str) else str(value),
+                    evidence=evidence if isinstance(evidence, dict) else {"value": evidence},
+                )
+
         # Prefer MySQL remediation when DB is clearly bad; otherwise app/PM2 first.
         prefer_mysql = incident.scenario == SCENARIO_MYSQL_RESTART_REQUIRED or (
             not mysql_healthy
@@ -163,7 +194,65 @@ def run_deterministic_incident(
             )
         )
 
-        if mentions_db and mysql_summary["healthy"]:
+        if focus in {"database", "website", "node_server"} and focused["healthy"]:
+            hypotheses = [
+                {
+                    "hypothesis": focused["root_cause"],
+                    "evidence_for": focused.get("detail"),
+                    "evidence_against": "n/a",
+                    "score": 0.92,
+                    "selected": True,
+                }
+            ]
+            proposed_action = ""
+            parameters = {}
+            rationale = f"Live {focus} checks passed for the asked question."
+            outcome_mode = "healthy"
+        elif focus == "database" and focused["needs_remediation"]:
+            hypotheses = [
+                {
+                    "hypothesis": focused["root_cause"],
+                    "evidence_for": focused.get("detail"),
+                    "evidence_against": "Website/PM2 may still look fine",
+                    "score": 0.9,
+                    "selected": True,
+                }
+            ]
+            proposed_action = "restart_mysql"
+            parameters = {}
+            rationale = str(focused["root_cause"])
+            outcome_mode = "remediate"
+        elif focus == "node_server" and focused["needs_remediation"]:
+            target = focused.get("restart_target") or "node-server"
+            hypotheses = [
+                {
+                    "hypothesis": focused["root_cause"],
+                    "evidence_for": focused.get("detail"),
+                    "evidence_against": "Website HTTP may still be 200",
+                    "score": 0.9,
+                    "selected": True,
+                }
+            ]
+            proposed_action = "restart_pm2_process"
+            parameters = {"process_name": target}
+            rationale = str(focused["root_cause"])
+            outcome_mode = "remediate"
+        elif focus == "website" and focused["needs_remediation"]:
+            target = focused.get("restart_target") or "signyn"
+            hypotheses = [
+                {
+                    "hypothesis": focused["root_cause"],
+                    "evidence_for": focused.get("detail"),
+                    "evidence_against": "n/a",
+                    "score": 0.88,
+                    "selected": True,
+                }
+            ]
+            proposed_action = "restart_pm2_process"
+            parameters = {"process_name": target}
+            rationale = str(focused["root_cause"])
+            outcome_mode = "remediate"
+        elif mentions_db and mysql_summary["healthy"]:
             hypotheses = [
                 {
                     "hypothesis": mysql_summary["root_cause"],
@@ -339,23 +428,24 @@ def run_deterministic_incident(
         db.commit()
 
         if outcome_mode == "healthy":
-            endpoint = (
-                health.get("health", {}).get("endpoint")
-                or settings.aegis_healthcheck_url
-            )
-            if mentions_db:
-                summary = (
-                    f"Checked live MySQL for: {report[:280]!r}. "
-                    f"{mysql_summary['detail']}. No remediation was needed."
+            summary = str(focused.get("summary") or "")
+            if not summary:
+                endpoint = (
+                    health.get("health", {}).get("endpoint")
+                    or settings.aegis_healthcheck_url
                 )
-                message = "MySQL looks healthy"
-            else:
-                summary = (
-                    f"Checked live evidence for: {report[:280]!r}. "
-                    f"HTTP {http_status} from {endpoint}; allowlisted PM2 apps are online; "
-                    f"MySQL: {mysql_summary['detail']}. No remediation was needed."
-                )
-                message = "Site/service appears healthy"
+                if mentions_db:
+                    summary = (
+                        f"Checked live MySQL for: {report[:280]!r}. "
+                        f"{mysql_summary['detail']}. No remediation was needed."
+                    )
+                else:
+                    summary = (
+                        f"Checked live evidence for: {report[:280]!r}. "
+                        f"HTTP {http_status} from {endpoint}; allowlisted PM2 apps are online; "
+                        f"MySQL: {mysql_summary['detail']}. No remediation was needed."
+                    )
+            message = str(selected["hypothesis"])
             service.finalize(
                 incident,
                 status=IncidentStatus.RECOVERED,
@@ -368,6 +458,7 @@ def run_deterministic_incident(
                 "message": message,
                 "root_cause": selected["hypothesis"],
                 "confidence": confidence,
+                "focus": focus,
             }
 
         # 4) Plan + safety

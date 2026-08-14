@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 import { IBM_Plex_Mono, IBM_Plex_Sans, Sora } from "next/font/google";
-import { SiteHeader } from "@/components/SiteHeader";
+import { AppShell } from "@/components/AppShell";
 import "./globals.css";
 
 const sans = IBM_Plex_Sans({
@@ -39,8 +39,7 @@ export default function RootLayout({
       >
         <div className="min-h-screen bg-ops-glow">
           <div className="min-h-screen bg-ops-grid bg-grid">
-            <SiteHeader />
-            <main className="mx-auto max-w-7xl px-6 py-8">{children}</main>
+            <AppShell>{children}</AppShell>
           </div>
         </div>
       </body>

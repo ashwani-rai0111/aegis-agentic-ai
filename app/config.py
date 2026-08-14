@@ -10,7 +10,8 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
-    database_url: str = "postgresql+psycopg://aegis:aegis@localhost:5432/aegis"
+    # XAMPP MySQL by default; set postgresql+psycopg://... if using Docker Postgres
+    database_url: str = "mysql+pymysql://root:@127.0.0.1:3306/aegis"
     openai_api_key: str | None = None
     openai_model_name: str = "gpt-4o-mini"
     # auto | crewai | deterministic
@@ -64,6 +65,12 @@ class Settings(BaseSettings):
     aegis_fix_backup_prefix: str = "backup-"
     aegis_fix_model: str = "composer-2.5"
     aegis_fix_max_concurrent: int = 1
+
+    # Dashboard login (interviewer demo lock)
+    aegis_dashboard_username: str = "signyn@0974"
+    aegis_dashboard_password: str = "signyn1234567890"
+    # Extra password required to start a Cursor fix job
+    aegis_fix_password: str = "ash@0974"
 
     def pm2_allowlist(self) -> set[str]:
         return {

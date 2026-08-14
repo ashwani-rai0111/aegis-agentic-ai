@@ -11,6 +11,7 @@ from app.models.schemas import (
     FixJobOut,
     FixRepoOut,
 )
+from app.services.auth import RequireSession, verify_fix_password
 from app.services.cursor_fix import count_active_jobs, start_fix_job_async
 from app.services.fix_repos import (
     backup_branch_name,
@@ -51,8 +52,14 @@ def get_job(job_id: str, db: Session = Depends(get_db)) -> FixJobOut:
 
 
 @router.post("", response_model=FixJobOut)
-def create_job(payload: FixJobCreate, db: Session = Depends(get_db)) -> FixJobOut:
+def create_job(
+    payload: FixJobCreate,
+    _: RequireSession,
+    db: Session = Depends(get_db),
+) -> FixJobOut:
     settings = get_settings()
+    if not verify_fix_password(payload.fix_password):
+        raise HTTPException(status_code=403, detail="Invalid fix password")
     repo = get_fix_repo(payload.repo_key)
     if not repo:
         configured = [r.key for r in list_fix_repos()]

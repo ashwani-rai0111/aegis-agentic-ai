@@ -49,8 +49,8 @@ export function IncidentList() {
             Incident console
           </h1>
           <p className="text-base leading-relaxed text-mist-300">
-            Describe a real issue (e.g. Signyn website down) or simulate a mock
-            CloudWatch incident. Aegis investigates, decides, acts, and verifies.
+            Describe a real issue (e.g. Signyn website down) or run against live
+            AWS. Aegis investigates, decides, acts, and verifies.
           </p>
         </div>
         <SimulateButton onDone={load} />

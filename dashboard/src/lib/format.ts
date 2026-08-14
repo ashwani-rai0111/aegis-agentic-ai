@@ -37,6 +37,16 @@ export function statusTone(status: string) {
   }
 }
 
+/** Agent still working — show loader until a terminal / waiting-for-human status. */
+export function isStatusInProgress(status: string) {
+  return ![
+    "RECOVERED",
+    "FAILED",
+    "ESCALATED",
+    "AWAITING_APPROVAL",
+  ].includes(status);
+}
+
 export function severityTone(severity: string) {
   switch (severity) {
     case "CRITICAL":

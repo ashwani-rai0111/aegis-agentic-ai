@@ -1,14 +1,19 @@
 "use client";
 
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
-import { fetchHealth, getApiUrl } from "@/lib/api";
+import { fetchHealth } from "@/lib/api";
+import { clearSession, getSessionUser } from "@/lib/auth";
 import type { HealthResponse } from "@/lib/types";
 
 export function SiteHeader() {
+  const router = useRouter();
   const [health, setHealth] = useState<HealthResponse | null>(null);
+  const [user, setUser] = useState<string | null>(null);
 
   useEffect(() => {
+    setUser(getSessionUser());
     let active = true;
     const load = async () => {
       try {
@@ -27,6 +32,11 @@ export function SiteHeader() {
   }, []);
 
   const dbUp = health?.database === "up";
+
+  function logout() {
+    clearSession();
+    router.replace("/login");
+  }
 
   return (
     <header className="border-b border-mist-300/10 bg-ink-950/70 backdrop-blur-md">
@@ -69,9 +79,29 @@ export function SiteHeader() {
               {health?.aws_configured ? " · aws✓" : ""}
             </span>
           </div>
-          <span className="max-w-[180px] truncate font-mono text-mist-400" title={getApiUrl()}>
+          {user ? (
+            <span
+              className="hidden max-w-[140px] truncate font-mono text-mist-400 lg:inline"
+              title={user}
+            >
+              {user}
+            </span>
+          ) : null}
+          <button
+            type="button"
+            onClick={logout}
+            className="font-mono text-mist-400 transition hover:text-signal-rose"
+          >
+            Logout
+          </button>
+          {/* API URL badge temporarily hidden
+          <span
+            className="max-w-[180px] truncate font-mono text-mist-400"
+            title={getApiUrl()}
+          >
             {getApiUrl().replace("http://", "")}
           </span>
+          */}
         </div>
       </div>
     </header>

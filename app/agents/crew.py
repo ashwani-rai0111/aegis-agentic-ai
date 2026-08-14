@@ -11,8 +11,7 @@ from crewai import Agent, Crew, Process, Task
 from sqlalchemy.orm import Session
 
 from app.agents.confidence import normalize_confidence
-from app.agents.issue_focus import mentions_database, summarize_mysql_for_question
-from app.agents.pm2_targets import is_pm2_unhealthy
+from app.agents.issue_focus import build_focused_live_answer, summarize_mysql_for_question
 from app.config import get_settings
 from app.models.enums import IncidentStatus
 from app.policies.safety import evaluate_action
@@ -128,137 +127,95 @@ def run_crewai_incident(
                 "approval_required": False,
             }
 
-        # Live evidence gate: answer the user's actual question; don't claim
-        # "site is up" when they asked about MySQL, and don't invent outages.
+        # Live evidence gate: answer the user's actual question (website vs
+        # node-server vs MySQL), instead of always returning the same stack blurb.
         if not mock_infra.has(incident_id):
             backend = get_tool_backend(incident_id)
             live_health = backend.health_check()
             live_pm2 = backend.get_pm2_status()
             live_mysql = backend.get_mysql_status()
-            http_status = int(live_health.get("health", {}).get("http_status") or 0)
-            health_ok = bool(live_health.get("health", {}).get("ok"))
-            if "ok" not in (live_health.get("health") or {}):
-                health_ok = 200 <= http_status < 400
             allowlist = settings.pm2_allowlist()
-            pm2_bad = any(
-                p.get("name") in allowlist and is_pm2_unhealthy(p)
-                for p in (live_pm2.get("processes") or [])
-            )
             mysql_block = live_mysql.get("mysql") or {}
-            db_question = mentions_database(report)
             mysql_summary = summarize_mysql_for_question(mysql_block, report)
-
-            service.add_observation(
-                incident_id,
-                source="mysql",
-                name="status",
-                value=str(mysql_summary.get("detail")),
-                evidence=mysql_block,
+            answer = build_focused_live_answer(
+                report=report,
+                health_block=live_health,
+                processes=live_pm2.get("processes") or [],
+                mysql_summary=mysql_summary,
+                allowlist=allowlist,
+                fallback_endpoint=settings.aegis_healthcheck_url,
             )
 
-            if db_question:
-                # Database questions are answered from MySQL probes, not website HTTP.
-                if mysql_summary["healthy"]:
-                    healthy_cause = mysql_summary["root_cause"]
-                    incident.root_cause = healthy_cause
-                    incident.confidence = max(confidence, 0.9)
-                    db.commit()
-                    service.add_hypothesis(
-                        incident_id,
-                        hypothesis=healthy_cause,
-                        evidence_for=mysql_summary["detail"],
-                        evidence_against="n/a",
-                        score=0.9,
-                        selected=True,
-                    )
-                    service.finalize(
-                        incident,
-                        status=IncidentStatus.RECOVERED,
-                        summary=(
-                            f"Checked live MySQL for: {report[:280]!r}. "
-                            f"{mysql_summary['detail']}. No remediation needed."
-                        ),
-                        root_cause=healthy_cause,
-                        confidence=0.9,
-                    )
-                    return {
-                        "status": IncidentStatus.RECOVERED.value,
-                        "message": "MySQL looks healthy",
-                        "root_cause": healthy_cause,
-                        "confidence": 0.9,
-                        "crew_raw": str(result),
-                    }
-                # Unhealthy DB → fall through so planner/safety can propose restart_mysql
-                plan_data = {
-                    "proposed_action": "restart_mysql",
-                    "parameters": {},
-                    "risk": "MEDIUM",
-                    "rationale": mysql_summary["root_cause"],
-                    "approval_required": True,
-                }
-                root_cause = mysql_summary["root_cause"]
-                confidence = 0.9
-                incident.root_cause = root_cause
-                incident.confidence = confidence
+            for source, name, value, evidence in answer.get("observations") or []:
+                service.add_observation(
+                    incident_id,
+                    source=source,
+                    name=name,
+                    value=str(value),
+                    evidence=evidence if isinstance(evidence, dict) else {"value": evidence},
+                )
+
+            if answer["healthy"]:
+                healthy_cause = str(answer["root_cause"])
+                incident.root_cause = healthy_cause
+                incident.confidence = max(confidence, 0.9)
                 db.commit()
                 service.add_hypothesis(
                     incident_id,
-                    hypothesis=root_cause,
-                    evidence_for=mysql_summary["detail"],
-                    evidence_against="Website may still respond while DB is degraded",
+                    hypothesis=healthy_cause,
+                    evidence_for=str(answer.get("detail") or ""),
+                    evidence_against="n/a",
                     score=0.9,
                     selected=True,
                 )
-            elif health_ok and not pm2_bad and mysql_summary["healthy"]:
-                endpoint = live_health.get("health", {}).get("endpoint")
-                healthy_cause = (
-                    f"Website/service appears healthy "
-                    f"(HTTP {http_status} from {endpoint}; PM2 apps online; MySQL ok)"
-                )
-                incident.root_cause = healthy_cause
-                incident.confidence = confidence
-                db.commit()
                 service.finalize(
                     incident,
                     status=IncidentStatus.RECOVERED,
-                    summary=(
-                        f"Checked live evidence for: {report[:280]!r}. "
-                        f"HTTP {http_status} from {endpoint}; PM2 allowlisted apps are online; "
-                        f"MySQL: {mysql_summary['detail']}. "
-                        "Crew proposal ignored because live checks show the stack is healthy."
-                    ),
+                    summary=str(answer["summary"]),
                     root_cause=healthy_cause,
-                    confidence=confidence,
+                    confidence=0.9,
                 )
                 return {
                     "status": IncidentStatus.RECOVERED.value,
-                    "message": "Site/service appears healthy",
+                    "message": healthy_cause,
                     "root_cause": healthy_cause,
-                    "confidence": confidence,
+                    "confidence": 0.9,
                     "crew_raw": str(result),
+                    "focus": answer.get("focus"),
                 }
-            elif health_ok and not pm2_bad and not mysql_summary["healthy"]:
-                # Site up but DB bad — force MySQL plan even if crew suggested PM2.
+
+            # Focused unhealthy path — force a plan matching the question.
+            if answer.get("proposed_action") == "restart_mysql":
                 plan_data = {
                     "proposed_action": "restart_mysql",
                     "parameters": {},
                     "risk": "MEDIUM",
-                    "rationale": mysql_summary["root_cause"],
+                    "rationale": answer["root_cause"],
                     "approval_required": True,
                 }
-                root_cause = mysql_summary["root_cause"]
-                confidence = 0.85
-                incident.root_cause = root_cause
-                incident.confidence = confidence
-                db.commit()
-                service.add_hypothesis(
-                    incident_id,
-                    hypothesis=root_cause,
-                    evidence_for=mysql_summary["detail"],
-                    evidence_against="HTTP/PM2 still look fine",
-                    score=0.85,
-                    selected=True,
-                )
+            elif answer.get("proposed_action") == "restart_pm2_process":
+                plan_data = {
+                    "proposed_action": "restart_pm2_process",
+                    "parameters": {
+                        "process_name": answer.get("restart_target") or "node-server"
+                    },
+                    "risk": "LOW",
+                    "rationale": answer["root_cause"],
+                    "approval_required": False,
+                }
+            root_cause = str(answer["root_cause"])
+            confidence = 0.9
+            incident.root_cause = root_cause
+            incident.confidence = confidence
+            db.commit()
+            service.add_hypothesis(
+                incident_id,
+                hypothesis=root_cause,
+                evidence_for=str(answer.get("detail") or ""),
+                evidence_against="Other stack components may still look fine",
+                score=0.9,
+                selected=True,
+            )
 
         service.transition(incident, IncidentStatus.PLAN_READY)
         proposed_action = str(plan_data.get("proposed_action", "restart_pm2_process"))

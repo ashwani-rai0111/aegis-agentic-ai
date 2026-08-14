@@ -11,6 +11,7 @@ from app.models.schemas import (
     RejectRequest,
     SimulateRequest,
 )
+from app.services.auth import RequireSession
 from app.services.incident_service import IncidentService
 from app.services.orchestrator import (
     approve_and_resume,
@@ -24,7 +25,11 @@ router = APIRouter(prefix="/incidents", tags=["incidents"])
 
 
 @router.post("/simulate", response_model=IncidentDetail)
-def simulate(payload: SimulateRequest, db: Session = Depends(get_db)) -> IncidentDetail:
+def simulate(
+    payload: SimulateRequest,
+    _: RequireSession,
+    db: Session = Depends(get_db),
+) -> IncidentDetail:
     try:
         outcome = simulate_incident(
             db,
@@ -45,7 +50,9 @@ def simulate(payload: SimulateRequest, db: Session = Depends(get_db)) -> Inciden
 
 @router.post("/live", response_model=IncidentDetail)
 def live_incident(
-    payload: LiveIncidentRequest, db: Session = Depends(get_db)
+    payload: LiveIncidentRequest,
+    _: RequireSession,
+    db: Session = Depends(get_db),
 ) -> IncidentDetail:
     try:
         outcome = run_live_incident(
@@ -66,7 +73,9 @@ def live_incident(
 
 @router.post("/investigate", response_model=IncidentDetail)
 def investigate(
-    payload: InvestigateRequest, db: Session = Depends(get_db)
+    payload: InvestigateRequest,
+    _: RequireSession,
+    db: Session = Depends(get_db),
 ) -> IncidentDetail:
     try:
         outcome = investigate_user_issue(
@@ -106,6 +115,7 @@ def get_incident(incident_id: str, db: Session = Depends(get_db)) -> IncidentDet
 def approve_incident(
     incident_id: str,
     payload: ApproveRequest,
+    _: RequireSession,
     db: Session = Depends(get_db),
 ) -> IncidentDetail:
     try:
@@ -127,6 +137,7 @@ def approve_incident(
 def reject_incident(
     incident_id: str,
     payload: RejectRequest,
+    _: RequireSession,
     db: Session = Depends(get_db),
 ) -> IncidentDetail:
     try:

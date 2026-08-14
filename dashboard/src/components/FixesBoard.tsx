@@ -29,6 +29,8 @@ export function FixesBoard() {
   const [notes, setNotes] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [showPasswordModal, setShowPasswordModal] = useState(false);
+  const [fixPassword, setFixPassword] = useState("");
 
   const load = useCallback(async () => {
     try {
@@ -50,9 +52,19 @@ export function FixesBoard() {
 
   const selected = repos.find((r) => r.key === repoKey);
 
-  async function onSubmit(e: React.FormEvent) {
+  function onSubmit(e: React.FormEvent) {
     e.preventDefault();
     if (!repoKey || errorText.trim().length < 5) return;
+    setFixPassword("");
+    setError(null);
+    setShowPasswordModal(true);
+  }
+
+  async function confirmStartFix() {
+    if (!fixPassword.trim()) {
+      setError("Fix password is required");
+      return;
+    }
     setLoading(true);
     setError(null);
     try {
@@ -60,9 +72,12 @@ export function FixesBoard() {
         repo_key: repoKey,
         error_text: errorText.trim(),
         notes: notes.trim() || undefined,
+        fix_password: fixPassword,
       });
       setErrorText("");
       setNotes("");
+      setFixPassword("");
+      setShowPasswordModal(false);
       await load();
       router.push(`/fixes/${job.id}`);
     } catch (err) {
@@ -162,10 +177,66 @@ export function FixesBoard() {
         >
           {loading ? "Starting Cursor agent…" : "Start Cursor fix"}
         </button>
-        {error ? (
+        {error && !showPasswordModal ? (
           <p className="font-mono text-xs text-signal-rose">{error}</p>
         ) : null}
       </form>
+
+      {showPasswordModal ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-ink-950/80 px-4 backdrop-blur-sm">
+          <div className="w-full max-w-md space-y-4 rounded-xl border border-mist-300/15 bg-ink-950 p-6 shadow-xl">
+            <div className="space-y-1">
+              <p className="label">Authorization</p>
+              <h2 className="font-display text-xl font-semibold text-mist-50">
+                Enter fix password
+              </h2>
+              <p className="text-sm text-mist-400">
+                Required before starting a Cursor Cloud fix job.
+              </p>
+            </div>
+            <input
+              type="password"
+              autoFocus
+              value={fixPassword}
+              onChange={(e) => setFixPassword(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  void confirmStartFix();
+                }
+              }}
+              placeholder="Fix password"
+              className="w-full rounded-lg border border-mist-300/15 bg-ink-950/50 px-3 py-2.5 font-mono text-sm text-mist-50 outline-none focus:ring-2 focus:ring-signal-sky/40"
+              disabled={loading}
+            />
+            {error ? (
+              <p className="font-mono text-xs text-signal-rose">{error}</p>
+            ) : null}
+            <div className="flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setShowPasswordModal(false);
+                  setFixPassword("");
+                  setError(null);
+                }}
+                disabled={loading}
+                className="rounded-lg border border-mist-300/20 px-4 py-2 font-mono text-sm text-mist-300 transition hover:bg-ink-950/60"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => void confirmStartFix()}
+                disabled={loading || !fixPassword.trim()}
+                className="rounded-lg bg-signal-sky px-4 py-2 font-mono text-sm font-semibold text-ink-950 transition hover:brightness-110 disabled:opacity-70"
+              >
+                {loading ? "Starting…" : "Confirm & start"}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
 
       <section className="space-y-3">
         <p className="label">Recent fix jobs</p>
