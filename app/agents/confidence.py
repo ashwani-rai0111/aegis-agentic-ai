@@ -18,3 +18,24 @@ def normalize_confidence(value: float | int | None, default: float = 0.5) -> flo
     if score > 1.0:
         return 1.0
     return score
+
+
+_PLACEHOLDER_HYPOTHESES = {
+    "",
+    "unknown",
+    "n/a",
+    "na",
+    "none",
+    "null",
+    "-",
+    "tbd",
+    "todo",
+    "placeholder",
+}
+
+
+def is_usable_hypothesis(text: object) -> bool:
+    label = str(text or "").strip()
+    if label.lower() in _PLACEHOLDER_HYPOTHESES:
+        return False
+    return len(label) >= 8

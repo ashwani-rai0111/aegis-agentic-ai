@@ -10,7 +10,7 @@ from typing import Any
 from crewai import Agent, Crew, Process, Task
 from sqlalchemy.orm import Session
 
-from app.agents.confidence import normalize_confidence
+from app.agents.confidence import is_usable_hypothesis, normalize_confidence
 from app.agents.issue_focus import build_focused_live_answer, summarize_mysql_for_question
 from app.config import get_settings
 from app.models.enums import IncidentStatus
@@ -102,9 +102,12 @@ def run_crewai_incident(
 
         service.transition(incident, IncidentStatus.HYPOTHESIS_READY)
         for item in rca_data.get("hypotheses", []):
+            label = str(item.get("hypothesis") or "").strip()
+            if not is_usable_hypothesis(label):
+                continue
             service.add_hypothesis(
                 incident_id,
-                hypothesis=str(item.get("hypothesis", "unknown")),
+                hypothesis=label,
                 evidence_for=str(item.get("evidence_for", "")),
                 evidence_against=str(item.get("evidence_against", "")),
                 score=normalize_confidence(item.get("score", 0.0)),
@@ -160,6 +163,7 @@ def run_crewai_incident(
                 incident.root_cause = healthy_cause
                 incident.confidence = max(confidence, 0.9)
                 db.commit()
+                service.clear_hypotheses(incident_id)
                 service.add_hypothesis(
                     incident_id,
                     hypothesis=healthy_cause,
@@ -208,6 +212,7 @@ def run_crewai_incident(
             incident.root_cause = root_cause
             incident.confidence = confidence
             db.commit()
+            service.clear_hypotheses(incident_id)
             service.add_hypothesis(
                 incident_id,
                 hypothesis=root_cause,

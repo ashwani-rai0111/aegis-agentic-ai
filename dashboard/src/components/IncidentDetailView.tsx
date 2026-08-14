@@ -37,7 +37,25 @@ export function IncidentDetailView({ incidentId }: { incidentId: string }) {
   const plan = incident?.plans?.length
     ? incident.plans[incident.plans.length - 1]
     : undefined;
-  const selectedHypotheses = incident?.hypotheses?.filter((h) => h.selected) ?? [];
+  const visibleHypotheses = useMemo(() => {
+    const placeholders = new Set([
+      "unknown",
+      "n/a",
+      "na",
+      "none",
+      "null",
+      "-",
+      "tbd",
+    ]);
+    return (incident?.hypotheses ?? [])
+      .filter((hyp) => {
+        const label = (hyp.hypothesis || "").trim().toLowerCase();
+        return label.length >= 8 && !placeholders.has(label);
+      })
+      .slice()
+      .sort((a, b) => b.score - a.score);
+  }, [incident]);
+  const selectedHypotheses = visibleHypotheses.filter((h) => h.selected);
 
   async function onApprove() {
     setApproving(true);
@@ -199,13 +217,10 @@ export function IncidentDetailView({ incidentId }: { incidentId: string }) {
         <section className="panel p-5">
           <h2 className="font-display text-xl text-mist-50">Hypotheses</h2>
           <div className="mt-4 space-y-3">
-            {incident.hypotheses.length === 0 ? (
+            {visibleHypotheses.length === 0 ? (
               <p className="text-sm text-mist-400">No hypotheses yet.</p>
             ) : (
-              incident.hypotheses
-                .slice()
-                .sort((a, b) => b.score - a.score)
-                .map((hyp) => (
+              visibleHypotheses.map((hyp) => (
                   <div
                     key={hyp.id}
                     className={`rounded-lg border px-3 py-3 ${
@@ -234,7 +249,7 @@ export function IncidentDetailView({ incidentId }: { incidentId: string }) {
                 ))
             )}
           </div>
-          {selectedHypotheses.length === 0 && incident.hypotheses.length > 0 ? (
+          {selectedHypotheses.length === 0 && visibleHypotheses.length > 0 ? (
             <p className="mt-3 font-mono text-xs text-mist-400">
               No hypothesis marked selected.
             </p>

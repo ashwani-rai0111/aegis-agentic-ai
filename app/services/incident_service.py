@@ -120,6 +120,14 @@ class IncidentService:
         self.db.refresh(row)
         return row
 
+    def clear_hypotheses(self, incident_id: str) -> None:
+        (
+            self.db.query(Hypothesis)
+            .filter(Hypothesis.incident_id == incident_id)
+            .delete(synchronize_session=False)
+        )
+        self.db.commit()
+
     def add_hypothesis(
         self,
         incident_id: str,
