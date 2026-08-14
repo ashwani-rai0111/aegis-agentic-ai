@@ -69,7 +69,7 @@ export function SimulateButton({
   }
 
   return (
-    <div className="flex flex-col items-start gap-3">
+    <div className="flex flex-col items-stretch gap-2 sm:items-end">
       <div className="flex flex-wrap gap-2">
         {/* Simulate buttons temporarily disabled — using live AWS only
         {SCENARIOS.map((scenario) => (
@@ -89,14 +89,25 @@ export function SimulateButton({
           type="button"
           onClick={runLive}
           disabled={loading !== null}
-          className="rounded-lg border border-signal-sky/60 bg-ink-950/40 px-4 py-2.5 font-mono text-sm font-semibold tracking-wide text-signal-sky transition hover:bg-ink-950/70 disabled:cursor-wait disabled:opacity-70"
-          title="Requires AEGIS_TOOL_BACKEND=aws and credentials in .env"
+          className="inline-flex cursor-pointer items-center justify-center gap-2 rounded-lg bg-signal-amber px-5 py-3 font-mono text-sm font-semibold tracking-wide text-ink-950 shadow-[0_8px_24px_rgba(232,162,58,0.28)] transition hover:brightness-110 hover:shadow-[0_10px_28px_rgba(232,162,58,0.38)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-signal-amber/70 focus-visible:ring-offset-2 focus-visible:ring-offset-ink-950 active:translate-y-px disabled:cursor-wait disabled:opacity-70"
         >
-          {loading === "live_aws" ? "Running on AWS…" : "Run against live AWS"}
+          {loading === "live_aws" ? (
+            <>
+              <span
+                className="inline-block h-3.5 w-3.5 animate-spin rounded-full border-2 border-ink-950/30 border-t-ink-950"
+                aria-hidden
+              />
+              Running on AWS…
+            </>
+          ) : (
+            <>
+              Run against live AWS
+            </>
+          )}
         </button>
       </div>
       <p className="font-mono text-[11px] text-mist-400">
-        Live AWS · CloudWatch + EC2 + SSM
+        CloudWatch · EC2 · SSM
       </p>
       {error ? (
         <p className="max-w-xl font-mono text-xs text-signal-rose">{error}</p>
